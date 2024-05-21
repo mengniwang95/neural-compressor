@@ -24,6 +24,7 @@ from onnx_neural_compressor import data_reader
 from onnx_neural_compressor import logger
 from onnx_neural_compressor import onnx_model
 from onnx_neural_compressor import utility
+from onnx_neural_compressor.algorithms import utility as quant_utils
 from onnx_neural_compressor.algorithms.smoother import calibrator
 
 from typing import List, Union  # isort: skip
@@ -83,8 +84,8 @@ def _quant_dequant_data(data, qType=3, scheme="sym"):
         qType (int): data type
         scheme (str): sym or asym quantization
     """
-    rmin, rmax, zero_point, scale, quantized_data = utility.quantize_data(
-        data.flatten().tolist(), utility.get_qrange_for_qType(qType, False), qType, scheme
+    rmin, rmax, zero_point, scale, quantized_data = quant_utils.quantize_data(
+        data.flatten().tolist(), quant_utils.get_qrange_for_qType(qType, False), qType, scheme
     )
     return ((quantized_data - zero_point) * scale).astype(data.dtype).reshape(data.shape)
 
@@ -470,7 +471,7 @@ class Smoother:
                     self._adjust_weights(scale)
                     input_scale = (
                         self._reshape_scale_for_input(tensor_name, key)
-                        if not (node.op_type == "Gemm" and utility.is_B_transposed(node))
+                        if not (node.op_type == "Gemm" and quant_utils.is_B_transposed(node))
                         else self.tensor_scales_info[key]
                     )
                     loss = self._get_output_loss(node_info[0], input_scale, calib_iter)
@@ -521,7 +522,7 @@ class Smoother:
                         base_dir=os.path.dirname(self.model.model_path) if self.model.model_path is not None else "",
                     )
                     if (len(weight.shape) == 4 and weight.shape[1] != 1) or (
-                        node.op_type == "Gemm" and utility.is_B_transposed(node)
+                        node.op_type == "Gemm" and quant_utils.is_B_transposed(node)
                     ):
                         weight = np.moveaxis(weight, 0, 1)
                     specific_alpha = alpha[node_info[0]] if isinstance(alpha, dict) else alpha
@@ -537,7 +538,7 @@ class Smoother:
                         base_dir=os.path.dirname(self.model.model_path) if self.model.model_path is not None else "",
                     )
                     if (len(weight.shape) == 4 and weight.shape[1] != 1) or (
-                        node.op_type == "Gemm" and utility.is_B_transposed(node)
+                        node.op_type == "Gemm" and quant_utils.is_B_transposed(node)
                     ):
                         weight = np.moveaxis(weight, 0, 1)
                     weight = weight.reshape(weight.shape[0], -1)
@@ -634,7 +635,7 @@ class Smoother:
                 if len(weight.shape) == 2:
                     scale = (
                         np.expand_dims(scales[key], axis=0)
-                        if node.op_type == "Gemm" and utility.is_B_transposed(node)
+                        if node.op_type == "Gemm" and quant_utils.is_B_transposed(node)
                         else np.expand_dims(scales[key], axis=-1)
                     )
                     new_weight = weight * scale

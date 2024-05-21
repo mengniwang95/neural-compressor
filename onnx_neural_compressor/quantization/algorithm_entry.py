@@ -22,6 +22,9 @@ from onnx_neural_compressor import constants
 from onnx_neural_compressor import data_reader
 from onnx_neural_compressor import logger
 from onnx_neural_compressor import utility
+from onnx_neural_compressor.algorithms import utility as quant_utils
+from onnx_neural_compressor.algorithms.post_training_quant import calibrate
+from onnx_neural_compressor.algorithms.post_training_quant import quantizer
 from onnx_neural_compressor.algorithms.smoother import core
 from onnx_neural_compressor.algorithms.weight_only import awq
 from onnx_neural_compressor.algorithms.weight_only import gptq
@@ -147,3 +150,78 @@ def awq_quantize_entry(
     calibration_data_reader.rewind()
     model = awq.apply_awq_on_model(model, configs_mapping, calibration_data_reader)
     return model
+
+###################### Static quant Entry ##################################
+@utility.register_algo(name=constants.STATIC_QUANT)
+def static_quantize_entry(
+    model: Union[pathlib.Path, str],
+    quant_config: config.StaticQuantConfig,
+    calibration_data_reader: data_reader.CalibrationDataReader,
+    model_output: Union[pathlib.Path, str] = None,
+    *args,
+    **kwargs,
+) -> onnx.ModelProto:
+    """The main entry to apply dynamic quantization."""
+    assert calibration_data_reader is not None, "Please provide calibration_data_reader"
+    assert isinstance(
+        calibration_data_reader, data_reader.CalibrationDataReader
+    ), "Please follow onnx_neural_compressor/quantization/calibrate.py to implement calibration_data_reader"
+
+    # map config to each op
+    model_info = quant_config.get_model_info(model=model)
+    configs_mapping = quant_config.to_config_mapping(model_info=model_info)
+    logger.debug(configs_mapping)
+
+    augment = calibrate.ONNXRTAugment(
+        model,
+        calibration_data_reader,
+        dump_op_types=quant_config.op_types_to_quantize if \
+            len(quant_config.op_types_to_quantize) > 0 else \
+            quant_config.white_list,
+        iterations=list(range(0, quant_config.calibration_sampling_size)),
+    )
+    min_max = augment.dump_minmax(configs_mapping)
+    quantize_params = augment.dump_calibration(configs_mapping, min_max=min_max)
+
+    _quantizer = quantizer.StaticQuantizer(
+        model,
+        configs_mapping,
+        quant_format=quant_config.quant_format,
+        quantization_params=quantize_params,
+        op_types_to_quantize=quant_config.op_types_to_quantize if \
+            len(quant_config.op_types_to_quantize) > 0 else \
+            quant_config.white_list,
+        optypes_to_exclude_output_quant=quant_config.extra_options.get("optypes_to_exclude_output_quant", []),
+        )
+    _quantizer.quantize_model()
+    _quantizer.model.save(model_output)
+    quant_utils.dump_model_op_stats(_quantizer.model.model, configs_mapping, quant_config.white_list)
+    return _quantizer.model.model
+
+###################### Dynamic quant Entry ##################################
+@utility.register_algo(name=constants.DYNAMIC_QUANT)
+def dynamic_quantize_entry(
+    model: Union[pathlib.Path, str],
+    quant_config: config.DynamicQuantConfig,
+    model_output: Union[pathlib.Path, str] = None,
+    *args,
+    **kwargs,
+) -> onnx.ModelProto:
+    """The main entry to apply dynamic quantization."""
+    # map config to each op
+    model_info = quant_config.get_model_info(model=model)
+    configs_mapping = quant_config.to_config_mapping(model_info=model_info)
+    logger.debug(configs_mapping)
+
+    _quantizer = quantizer.DynamicQuantizer(
+        model,
+        configs_mapping,
+        op_types_to_quantize=quant_config.op_types_to_quantize if \
+            len(quant_config.op_types_to_quantize) > 0 else \
+            quant_config.white_list,
+        )
+    _quantizer.quantize_model()
+    if model_output is not None:
+        _quantizer.model.save(model_output)
+    quant_utils.dump_model_op_stats(_quantizer.model.model, configs_mapping, quant_config.white_list)
+    return _quantizer.model.model

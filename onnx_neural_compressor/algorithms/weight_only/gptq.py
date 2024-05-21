@@ -28,7 +28,7 @@ from onnx_neural_compressor import data_reader
 from onnx_neural_compressor import onnx_model
 from onnx_neural_compressor import utility
 from onnx_neural_compressor.algorithms.layer_wise import core
-from onnx_neural_compressor.algorithms.weight_only import utility as woq_utility
+from onnx_neural_compressor.algorithms import utility as quant_utils
 from packaging.version import Version
 
 from typing import List, Union  # isort: skip
@@ -233,7 +233,7 @@ def gptq_quantize(
         model = onnx_model.ONNXModel(model)
     base_dir = os.path.dirname(model.model_path) if model.model_path is not None else ""
 
-    inputs, so = woq_utility.prepare_inputs(model, data_reader, providers)
+    inputs, so = quant_utils.prepare_inputs(model, data_reader, providers)
     del data_reader
     org_output = copy.deepcopy(model.model.graph.output)
     model.remove_tensors_from_outputs([i.name for i in org_output])
@@ -343,10 +343,9 @@ def gptq_quantize(
                 # MatMulNBits supports 4 bits and 2^n group_size with ort > 1.16.1, supported by CPU EP AND CUDA EP
                 org_shape = weight.shape
                 k_blocks = (org_shape[0] + group_size - 1) // group_size
-                q_weight = woq_utility.pad_tensor(q_weight, group_size, k_blocks)
-                q_weight, scale, zp = woq_utility.quant_tensor(q_weight.T, num_bits, group_size, scheme, "uint")
-
-                q_matmul_node, new_inits = woq_utility.make_matmul_weight_only_node(
+                q_weight = quant_utils.pad_tensor(q_weight, group_size, k_blocks)
+                q_weight, scale, zp = quant_utils.quant_tensor(q_weight.T, num_bits, group_size, scheme, "uint")
+                q_matmul_node, new_inits = quant_utils.make_matmul_weight_only_node(
                     node=node,
                     weight_shape=org_shape,
                     num_bits=num_bits,
@@ -364,7 +363,7 @@ def gptq_quantize(
             else:
                 q_weight_tensor = onnx.helper.make_tensor(
                     name=node.input[1] + "_Q{}G{}".format(str(num_bits), str(group_size)),
-                    data_type=utility.dtype_mapping[str(dtype)],
+                    data_type=quant_utils.dtype_mapping[str(dtype)],
                     dims=q_weight.shape,
                     vals=q_weight.astype(dtype).tobytes(),
                     raw=True,

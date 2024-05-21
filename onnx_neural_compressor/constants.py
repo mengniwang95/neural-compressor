@@ -30,6 +30,7 @@ BASE_CONFIG = "base_config"
 COMPOSABLE_CONFIG = "composable_config"
 RTN = "rtn"
 STATIC_QUANT = "static_quant"
+DYNAMIC_QUANT = "dynamic_quant"
 SMOOTH_QUANT = "smooth_quant"
 GPTQ = "gptq"
 AWQ = "awq"
@@ -48,3 +49,14 @@ PRIORITY_SMOOTH_QUANT = 80
 MAXIMUM_PROTOBUF = 2147483648
 
 WHITE_MODULE_LIST = ["MatMul", "Conv"]
+STATIC_OP_LIST = [
+    "FusedConv", "Conv", "Gather", "GatherElements", "GatherND", "Tile", 
+    "MatMul", "Gemm", "EmbedLayerNormalization", "Attention", "Mul",
+    "Relu", "Clip", "LeakyRelu", "Sigmoid", "MaxPool", "GlobalAveragePool",
+    "Pad", "Split", "Add", "Squeeze", "Reshape", "Concat", "AveragePool",
+    "Unsqueeze", "Transpose", "ArgMax", "Resize", "Abs", "Shrink", "Sign",
+    "Flatten", "Expand", "Slice", "Mod", "ReduceMax", "ReduceMin", "CenterCropPad"
+]
+DYNAMIC_OP_LIST = [
+    "FusedConv", "Conv", "EmbedLayerNormalization", "MatMul", "Gather", "Attention", "LSTM"
+]

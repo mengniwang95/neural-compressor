@@ -27,9 +27,8 @@ from onnx_neural_compressor import constants
 from onnx_neural_compressor import data_reader
 from onnx_neural_compressor import logger
 from onnx_neural_compressor import onnx_model
-from onnx_neural_compressor import utility
+from onnx_neural_compressor.algorithms import utility as quant_utils
 from onnx_neural_compressor.algorithms.weight_only import rtn
-from onnx_neural_compressor.algorithms.weight_only import utility as woq_utility
 from packaging import version
 
 from typing import List, Union  # isort: skip
@@ -98,7 +97,7 @@ def _apply_awq_scale(model, weight_config, absorb_pairs, output_dicts, num_bits,
                 scales = np.clip(np.power(inp_scale, ratio) / np.power(w_scale, (1 - ratio)), 1e-4, None)
                 scales = scales / np.sqrt(np.max(scales) * np.min(scales))
                 weight = weight.T * scales
-                weight = woq_utility.pad_tensor(weight, group_size, (org_w_shape[0] + group_size - 1) // group_size).T
+                weight = quant_utils.pad_tensor(weight, group_size, (org_w_shape[0] + group_size - 1) // group_size).T
 
                 if (version.Version(ort.__version__) > constants.ONNXRT1161_VERSION and num_bits == 4) or (
                     version.Version(ort.__version__) >= constants.ONNXRT116_VERSION
@@ -107,11 +106,11 @@ def _apply_awq_scale(model, weight_config, absorb_pairs, output_dicts, num_bits,
                 ):  # pragma: no cover
                     # MatMulFpQ4 support 4 bits and 32 group_size with ort 1.16.0 and 1.16.1 versions
                     # MatMulNBits supports 4 bits and 2^n group_size with ort > 1.16.1
-                    q_weight = woq_utility.qdq_tensor(weight, num_bits, group_size, scheme, "uint") / np.expand_dims(
+                    q_weight = quant_utils.qdq_tensor(weight, num_bits, group_size, scheme, "uint") / np.expand_dims(
                         scales, axis=-1
                     )
                 else:
-                    q_weight = woq_utility.qdq_tensor(weight, num_bits, group_size, scheme, "int") / np.expand_dims(
+                    q_weight = quant_utils.qdq_tensor(weight, num_bits, group_size, scheme, "int") / np.expand_dims(
                         scales, axis=-1
                     )
 
@@ -139,7 +138,7 @@ def _apply_awq_scale(model, weight_config, absorb_pairs, output_dicts, num_bits,
 
             new_tensor = onnx.helper.make_tensor(
                 name=node.input[1] + "_scaled",
-                data_type=utility.dtype_mapping[str(dtype)],
+                data_type=quant_utils.dtype_mapping[str(dtype)],
                 dims=tensor.shape,
                 vals=tensor.tobytes(),
                 raw=True,
@@ -193,7 +192,7 @@ def _apply_awq_scale(model, weight_config, absorb_pairs, output_dicts, num_bits,
             # insert mul
             scale_tensor = onnx.helper.make_tensor(
                 name=parent.output[0] + "_weight_only_scale",
-                data_type=utility.dtype_mapping[str(dtype)],
+                data_type=quant_utils.dtype_mapping[str(dtype)],
                 dims=best_scale.shape,
                 vals=(1.0 / best_scale).flatten().tolist(),
             )
@@ -246,7 +245,7 @@ def _apply_awq_clip(model, weight_config, absorb_pairs, output_dicts, num_bits, 
             org_out = np.matmul(inp, org_weight)  # n_token, oc
 
             k_blocks = (org_w_shape[0] - 1) // group_size + 1
-            org_weight = woq_utility.pad_tensor(org_weight, group_size, k_blocks)
+            org_weight = quant_utils.pad_tensor(org_weight, group_size, k_blocks)
 
             org_weight = np.transpose(org_weight)
 
@@ -262,11 +261,11 @@ def _apply_awq_clip(model, weight_config, absorb_pairs, output_dicts, num_bits, 
                 ):  # pragma: no cover
                     # MatMulFpQ4 support 4 bits and 32 group_size with ort 1.16.0 and 1.16.1 versions
                     # MatMulNBits supports 4 bits and 2^n group_size with ort > 1.16.1
-                    weight = woq_utility.qdq_tensor(
+                    weight = quant_utils.qdq_tensor(
                         weight, num_bits, group_size, scheme, "uint", ratios.get(node.input[1], 1)
                     )
                 else:
-                    weight = woq_utility.qdq_tensor(
+                    weight = quant_utils.qdq_tensor(
                         weight, num_bits, group_size, scheme, "int", ratios.get(node.input[1], 1)
                     )
                 weight = np.reshape(weight, (org_w_shape[1], -1))[:, : org_w_shape[0]]
@@ -330,7 +329,7 @@ def awq_quantize(
     full_ratio = {}
 
     if enable_mse_search:
-        inputs, so = woq_utility.prepare_inputs(model, data_reader, providers)
+        inputs, so = quant_utils.prepare_inputs(model, data_reader, providers)
         del data_reader
 
         org_output = copy.deepcopy(model.model.graph.output)

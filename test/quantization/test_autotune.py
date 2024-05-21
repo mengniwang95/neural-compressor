@@ -371,5 +371,17 @@ class TestONNXRT3xAutoTune(unittest.TestCase):
         self.assertTrue(len(op_names) > 0)
 
 
+    def test_dynamic_auto_tune(self):
+        partial_fake_eval = functools.partial(fake_eval, eval_result_lst=[1.0, 0.8, 0.99, 0.81, 1.0, 0.99])
+
+        custom_tune_config = tuning.TuningConfig(config_set=config.DynamicQuantConfig.get_config_set_for_tuning())
+        best_model = tuning.autotune(
+            model_input=self.gptj,
+            tune_config=custom_tune_config,
+            eval_fn=partial_fake_eval,
+        )
+        self.assertIsNotNone(best_model)
+
+
 if __name__ == "__main__":
     unittest.main()

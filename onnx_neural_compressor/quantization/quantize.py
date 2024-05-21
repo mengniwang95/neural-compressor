@@ -34,10 +34,12 @@ def quantize(
                 model_input, nc_sq_config, quant_config.calibration_data_reader, model_output=model_output
             )
         else:
-            # call static_quant_entry
-            pass
+            algos.static_quantize_entry(
+                model_input, quant_config, quant_config.calibration_data_reader, model_output=model_output
+            )
     elif isinstance(quant_config, config.DynamicQuantConfig):
-        # call dynamic_quant_entry
-        pass
+        algos.dynamic_quantize_entry(
+            model_input, quant_config, model_output=model_output
+            )
     else:
         raise TypeError("Invalid quantization config type, it must be either StaticQuantConfig or DynamicQuantConfig.")

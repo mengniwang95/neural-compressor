@@ -17,6 +17,8 @@
 
 from __future__ import annotations
 
+import copy
+import dataclasses
 import enum
 import inspect
 import itertools
@@ -371,7 +373,21 @@ class BaseConfig(ABC):
 
         # Get the parameters and their default values
         parameters = signature.parameters
-        return parameters.get(param).default
+        return parameters.get(param).default if parameters.get(param) is not None else None
+
+    @staticmethod
+    def build_tuning_param(config: BaseConfig, param: str):
+        if isinstance(param, str):
+            signature = inspect.signature(config.__init__)
+            parameters = signature.parameters
+            default_param = parameters.get(param).default if parameters.get(param) is not None else None
+            tuning_param = TuningParam(name=param, tunable_type=List[type(default_param)])
+        elif isinstance(param, TuningParam):
+            tuning_param = param
+        else:
+            raise ValueError(f"Unsupported param type: {param}")
+        return tuning_param
+
 
     def expand(self) -> List[BaseConfig]:
         """Expand the config.
@@ -409,22 +425,14 @@ class BaseConfig(ABC):
         """
         config_list: List[BaseConfig] = []
         params_list = self.params_list
+        model_params_list = getattr(self, "model_params_list", [])
         config = self
         tuning_param_list = []
         not_tuning_param_pair = {}  # key is the param name, value is the user specified value
-        for param in params_list:
-            # Create `tuning.TuningParam` for each param
-            # There are two cases:
-            # 1. The param is a string.
-            # 2. The param is a `tuning.TuningParam` instance.
-            if isinstance(param, str):
-                default_param = self.get_the_default_value_of_param(config, param)
-                tuning_param = TuningParam(name=param, tunable_type=List[type(default_param)])
-            elif isinstance(param, TuningParam):
-                tuning_param = param
-            else:
-                raise ValueError(f"Unsupported param type: {param}")
-            # Assign the options to the `tuning.TuningParam` instance
+
+        # set model params
+        for param in model_params_list:
+            tuning_param = self.build_tuning_param(config, param)
             param_val = getattr(config, tuning_param.name)
             if param_val is not None:
                 if tuning_param.is_tunable(param_val):
@@ -432,20 +440,85 @@ class BaseConfig(ABC):
                     tuning_param_list.append(tuning_param)
                 else:
                     not_tuning_param_pair[tuning_param.name] = param_val
-        logger.debug("Tuning param list: %s", tuning_param_list)
-        logger.debug("Not tuning param pair: %s", not_tuning_param_pair)
         if len(tuning_param_list) == 0:
             config_list = [config]
         else:
             tuning_param_name_lst = [tuning_param.name for tuning_param in tuning_param_list]
             for params_values in itertools.product(*[tuning_param.options for tuning_param in tuning_param_list]):
-                tuning_param_pair = dict(zip(tuning_param_name_lst, params_values))
-                tmp_params_dict = {**not_tuning_param_pair, **tuning_param_pair}
-                new_config = self.__class__(**tmp_params_dict)
+                new_config = copy.deepcopy(self)
+                for param_name, param_value in zip(tuning_param_name_lst, params_values):
+                    setattr(new_config, param_name, param_value)
                 logger.info(new_config.to_dict())
                 config_list.append(new_config)
-        logger.info("Expanded the %s and got %d configs.", self.__class__.name, len(config_list))
-        return config_list
+
+        # global op config
+        global_op_tuning_param_list = []
+        for param in params_list:
+            # Create `tuning.TuningParam` for each param
+            # There are two cases:
+            # 1. The param is a string.
+            # 2. The param is a `tuning.TuningParam` instance.
+            tuning_param = self.build_tuning_param(config, param)
+ 
+            # Assign the options to the `tuning.TuningParam` instance
+            param_val = getattr(config, tuning_param.name)
+            if param_val is not None:
+                if tuning_param.is_tunable(param_val):
+                    tuning_param.options = param_val
+                    global_op_tuning_param_list.append(tuning_param)
+                else:
+                    not_tuning_param_pair[tuning_param.name] = param_val
+ 
+        all_config_lst = []
+        for model_config in config_list:
+            if len(global_op_tuning_param_list) > 0:
+                tuning_param_name_lst = [tuning_param.name for tuning_param in global_op_tuning_param_list]
+                for params_values in itertools.product(*[tuning_param.options for tuning_param in global_op_tuning_param_list]):
+                    params_dir = dict(model_config.to_dict(), **dict(zip(tuning_param_name_lst, params_values)))
+                    new_config = model_config.__class__(**params_dir)
+                    for param_name, param_value in zip(tuning_param_name_lst, params_values):
+                        setattr(new_config, param_name, param_value)
+                    logger.info(new_config.to_dict())
+                    all_config_lst.append(new_config)
+            else:
+                all_config_lst.append(model_config)
+ 
+        # local op config
+        # set tunable op config by set_local
+        op_tunable_name_lst = []
+        op_tunable_cfg_lst = []
+        op_type_config_dict, op_name_config_dict = self._get_op_name_op_type_config()
+        # find tunable op config
+        for config_dict in [op_type_config_dict, op_name_config_dict]:
+            for name, cfg in config_dict.items():
+                tunable_params = {k: v for k, v in cfg.items() if isinstance(v, list)}
+                if len(tunable_params) == 0:
+                    continue
+                not_tunable_params = {k: v for k, v in cfg.items() if k not in tunable_params}
+                keys, values = zip(*tunable_params.items())
+                combinations = [dict(zip(keys, combination)) for combination in itertools.product(*values)]
+                result = [dict(combination, **not_tunable_params) for combination in combinations]
+                op_tunable_cfg_lst.append(result)
+                op_tunable_name_lst.append(name)
+
+
+        all_config_lst2 = []
+        if len(op_tunable_name_lst) > 0:
+            for model_config in all_config_lst:
+                for cfgs in itertools.product(*op_tunable_cfg_lst):
+                    new_config = copy.deepcopy(model_config)
+                    for name, cfg in zip(op_tunable_name_lst, cfgs):
+                        new_config.set_local(name, cfg)
+                    all_config_lst2.append(new_config)
+        else:
+            all_config_lst2 = all_config_lst
+<<<<<<< HEAD
+                
+=======
+
+>>>>>>> 978de3cfec (support W8A8)
+        logger.info("Expanded the %s and got %d configs.", self.__class__.name, len(all_config_lst2))
+        return all_config_lst2
 
     def _get_op_name_op_type_config(self):
         op_type_config_dict = dict()
@@ -480,8 +553,7 @@ class BaseConfig(ABC):
 
     @staticmethod
     def _is_op_type(name: str) -> bool:
-        # * Ort and TF may override this method.
-        return not isinstance(name, str)
+        return name in constants.STATIC_OP_LIST or name in constants.DYNAMIC_OP_LIST
 
     @classmethod
     @abstractmethod
@@ -547,7 +619,7 @@ class ComposableConfig(BaseConfig):
 
     @classmethod
     def get_config_set_for_tuning(cls) -> None:
-        # TODO (Yi) handle the composable config in `tuning_config`
+        # TODO handle the composable config in `tuning_config`
         return None
 
     def get_model_info(self, model, *args, **kwargs):
@@ -572,8 +644,31 @@ def register_supported_configs():
         config_cls.register_supported_configs()
 
 
+@dataclasses.dataclass
+class OperatorConfig:
+
+    def __init__(
+        self,
+        weight_type,
+        activation_type,
+        per_channel,
+        weight_sym,
+        activation_sym,
+        calibrate_method=quantization.CalibrationMethod.MinMax,
+    ):
+        self.weight_type = getattr(weight_type, "tensor_type", weight_type)
+        self.activation_type = getattr(activation_type, "tensor_type", activation_type)
+        self.per_channel = per_channel
+        self.weight_sym = weight_sym
+        self.activation_sym = activation_sym
+        self.calibrate_method = calibrate_method
+
+    def to_dict(self):
+        return self.__dict__
+
+
 class _OperatorConfig(NamedTuple):
-    config: BaseConfig
+    config: OperatorConfig
     operators: List[Union[str, Callable]]
     valid_func_list: List[Callable] = []
 
@@ -1174,16 +1269,51 @@ def get_woq_tuning_config() -> list:
     return [RTN_G32ASYM, GPTQ_G32ASYM, GPTQ_G32ASYM_DISABLE_LAST_MATMUL, GPTQ_G128ASYM, AWQ_G32ASYM]
 
 
-##################### INC Algo Configs End ###################################
+##################### NC Algo Configs End ###################################
 
 register_supported_configs()
 
 ##################### Config for ONNXRuntime-like user-facing API ############
 
 
-class StaticQuantConfig(quantization.StaticQuantConfig):
+class StaticQuantConfig(BaseConfig, quantization.StaticQuantConfig):
 
-    def __init__(self, calibration_data_reader: data_reader.CalibrationDataReader, extra_options=None, *args, **kwargs):
+    supported_configs: List[_OperatorConfig] = []
+    params_list: List[str] = [
+        "weight_type",
+        "activation_type",
+        "per_channel",
+        "weight_sym",
+        "activation_sym",
+        "calibrate_method",
+    ]
+    model_params_list: List[str] = [
+        "quant_format",
+        "reduce_range",
+        "use_external_data_format",
+        "calibration_sampling_size",
+        "quant_last_matmul",
+    ]
+    name: str = constants.STATIC_QUANT
+
+
+    def __init__(
+        self,
+        calibration_data_reader: data_reader.CalibrationDataReader = None,
+        calibrate_method=quantization.CalibrationMethod.MinMax,
+        quant_format=quantization.QuantFormat.QDQ,
+        activation_type=quantization.QuantType.QInt8,
+        weight_type=quantization.QuantType.QInt8,
+        op_types_to_quantize=None,
+        nodes_to_quantize=None,
+        nodes_to_exclude=None,
+        per_channel=False,
+        reduce_range=False,
+        use_external_data_format=False,
+        extra_options=None,
+        white_list: List[Union[str, Callable]] = constants.STATIC_OP_LIST,
+        **kwargs,
+    ):
         """This is a class for static Quant Configuration.
 
         Inherit from StaticQuantConfig:
@@ -1210,22 +1340,348 @@ class StaticQuantConfig(quantization.StaticQuantConfig):
                 If enabled, each op will have an individual scale, mainlyfor accuracy.
                 If not enabled,  ops with the same input will share a scale, mainly for performance.
         """
-        super().__init__(calibration_data_reader=calibration_data_reader, extra_options=extra_options, *args, **kwargs)
+        quantization.StaticQuantConfig.__init__(
+            self,
+            calibration_data_reader=calibration_data_reader,
+            calibrate_method=calibrate_method,
+            quant_format=quant_format,
+            activation_type=activation_type,
+            weight_type=weight_type,
+            op_types_to_quantize=op_types_to_quantize,
+            nodes_to_quantize=nodes_to_quantize,
+            nodes_to_exclude=nodes_to_exclude,
+            per_channel=per_channel,
+            reduce_range=reduce_range,
+            use_external_data_format=use_external_data_format,
+            extra_options=extra_options,
+        )
+        BaseConfig.__init__(self, white_list=white_list)
+        self.quant_last_matmul = kwargs.get("quant_last_matmul", True)
+        self.calibration_sampling_size = kwargs.get("calibration_sampling_size", 100)
+        self.weight_sym = self.extra_options.get("WeightSymmetric", True)
+        self.activation_sym = self.extra_options.get("ActivationSymmetric", False)
+        self._post_init()
+
+    @staticmethod
+    def get_model_info(model) -> list:
+        if not isinstance(model, onnx.ModelProto):
+            model = onnx.load(model, load_external_data=False)
+<<<<<<< HEAD
+ 
+=======
+
+>>>>>>> 978de3cfec (support W8A8)
+        white_list = constants.STATIC_OP_LIST
+        filter_result = []
+        for node in model.graph.node:
+            if node.op_type in white_list:
+                pair = (node.name, node.op_type)
+                filter_result.append(pair)
+        logger.debug(f"Get model info: {filter_result}")
+        return filter_result
+
+    def get_params_dict(self):
+        result = dict()
+        for param in self.params_list:
+            result[param] = getattr(self, param)
+        return result
+
+    def get_model_params_dict(self):
+        result = dict()
+        for param in self.model_params_list:
+            result[param] = getattr(self, param)
+        return result
+
+    def _post_init(self):
+        for op_name_or_type in self.white_list:
+            params = self.get_params_dict()
+            op_config = OperatorConfig(**params)
+            self.set_local(op_name_or_type, op_config.to_dict())
+
+    def to_config_mapping(self, config_list: list = None, model_info: list = None) -> OrderedDict:
+        config_mapping = OrderedDict()
+        if config_list is None:
+            config_list = [self]
+        for config in config_list:
+            # update model level setting
+            config_mapping.update(config.get_model_params_dict())
+
+            # update node level setting
+            global_config = config.global_config
+            op_type_config_dict, op_name_config_dict = config._get_op_name_op_type_config()
+            for op_name, op_type in model_info:
+                if op_type in op_type_config_dict:
+                    config_mapping[op_name] = op_type_config_dict[op_type]
+                for op_name_pattern in op_name_config_dict:
+                    if re.match(op_name_pattern, op_name):
+                        config_mapping[op_name] = op_name_config_dict[op_name_pattern]
+        return config_mapping
+
+    @classmethod
+<<<<<<< HEAD
+    def get_config_set_for_tuning(cls) -> Union[None, "StaticQuantConfig", List["StaticQuantConfig"]]:  # pragma: no cover
+        return StaticQuantConfig(calibration_sampling_size=[50, 100])
+=======
+    def get_config_set_for_tuning(cls, execution_provider=None, quant_format=quantization.QuantFormat.QOperator) -> Union[None, "StaticQuantConfig", List["StaticQuantConfig"]]:  # pragma: no cover
+        if execution_provider is None:
+            execution_provider = utility.auto_detect_ep()
+        StaticQuantConfig.register_supported_configs()
+        cfg = StaticQuantConfig()
+        op_list = utility.get_op_list(STATIC_QUANT, execution_provider, quant_format)
+        for optype in op_list:
+            supported_config = [i for i in StaticQuantConfig.supported_configs if optype in i.operators]
+            if len(supported_config) == 0:
+                continue
+            config = supported_config[0].config
+            for valid_func in supported_config[0].valid_func_list:
+                config = valid_func(config, execution_provider, quant_format)
+            cfg.set_local(optype, config.to_dict())
+        return config
+>>>>>>> 978de3cfec (support W8A8)
+
+    @classmethod
+    def register_supported_configs(cls) -> None:
+        supported_configs = []
+<<<<<<< HEAD
+        linear_rtn_config = StaticQuantConfig()
+        operators = ["MatMul"]
+        supported_configs.append(_OperatorConfig(config=linear_rtn_config, operators=operators))
+=======
+        supported_configs.append(
+            _OperatorConfig(
+                config=OperatorConfig(
+                    weight_type=onnx_proto.TensorProto.UINT8,
+                    weight_sym=False,
+                    per_channel=True,
+                    calibrate_method="minmax",
+                    activation_type=onnx_proto.TensorProto.UINT8,
+                    activation_sym=False,
+                ),
+                operators=["GatherND", "GatherElements", "Gather", "FusedConv"]))
+        supported_configs.append(
+            _OperatorConfig(
+                config=OperatorConfig(
+                    weight_type=onnx_proto.TensorProto.INT8,
+                    weight_sym=True,
+                    per_channel=True,
+                    calibrate_method="minmax",
+                    activation_type=onnx_proto.TensorProto.UINT8,
+                    activation_sym=False,
+                ),
+                operators=["Gemm"]))
+        supported_configs.append(
+            _OperatorConfig(
+                config=OperatorConfig(
+                    weight_type=onnx_proto.TensorProto.UINT8,
+                    weight_sym=False,
+                    per_channel=False,
+                    calibrate_method="minmax",
+                    activation_type=onnx_proto.TensorProto.UINT8,
+                    activation_sym=False,
+                ),
+                operators=["EmbedLayerNormalization"]))
+        supported_configs.append(
+            _OperatorConfig(
+                config=OperatorConfig(
+                    weight_type=onnx_proto.TensorProto.INT8,
+                    weight_sym=True,
+                    per_channel=True,
+                    calibrate_method="minmax",
+                    activation_type=onnx_proto.TensorProto.UINT8,
+                    activation_sym=False,
+                ),
+                operators=["Conv", "MatMul"]))
+        supported_configs.append(
+            _OperatorConfig(
+                config=OperatorConfig(
+                    weight_type=onnx_proto.TensorProto.INT8,
+                    weight_sym=True,
+                    per_channel=False,
+                    calibrate_method="minmax",
+                    activation_type=onnx_proto.TensorProto.UINT8,
+                    activation_sym=False,
+                ),
+                operators=["Add", "Mul", "ArgMax"]))
+        supported_configs.append(
+            _OperatorConfig(
+                config=OperatorConfig(
+                    weight_type=onnx_proto.TensorProto.INT8,
+                    weight_sym=True,
+                    per_channel=False,
+                    calibrate_method="minmax",
+                    activation_type=onnx_proto.TensorProto.UINT8,
+                    activation_sym=False,
+                ),
+                operators=[
+                    "Relu", "Clip", "LeakyRelu", "Sigmoid", "MaxPool", "GlobalAveragePool",
+                    "Pad", "Split", "Squeeze", "Reshape", "Concat", "AveragePool", "Tile", 
+                    "Unsqueeze", "Transpose", "Resize", "Abs", "Shrink", "Sign", "Attention",
+                    "Flatten", "Expand", "Slice", "Mod", "ReduceMax", "ReduceMin", "CenterCropPad"
+                ],
+            ))
+>>>>>>> 978de3cfec (support W8A8)
+        cls.supported_configs = supported_configs
 
     def to_dict(self):
         return self.__dict__
 
 
-class DynamicQuantConfig(quantization.DynamicQuantConfig):
+class DynamicQuantConfig(BaseConfig, quantization.DynamicQuantConfig):
     """This is a class for dynamic Quant Configuration.
 
     Inherit from DynamicQuantConfig:
         https://github.com/microsoft/onnxruntime/blob/v1.17.1/onnxruntime/python/tools/quantization/quantize.py#L206
     """
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    supported_configs: List[_OperatorConfig] = []
+    params_list: List[str] = [
+        "weight_type",
+        "activation_type",
+        "per_channel",
+        "weight_sym",
+        "activation_sym",
+    ]
+    model_params_list: List[str] = [
+        "reduce_range",
+        "use_external_data_format",
+        "quant_last_matmul",
+    ]
+    name: str = constants.DYNAMIC_QUANT
 
+    def __init__(
+        self,
+        weight_type: quantization.QuantType = quantization.QuantType.QInt8,
+        op_types_to_quantize: List[str] = None,
+        nodes_to_quantize: List[str] = None,
+        nodes_to_exclude: List[str] = None,
+        per_channel: bool = False,
+        reduce_range: bool = False,
+        use_external_data_format: bool = False,
+        extra_options: dict = None,
+        white_list: List[Union[str, Callable]] = constants.DYNAMIC_OP_LIST,
+        **kwargs,
+    ):
+        quantization.DynamicQuantConfig.__init__(
+            self,
+            weight_type=weight_type,
+            op_types_to_quantize=op_types_to_quantize,
+            nodes_to_quantize=nodes_to_quantize,
+            nodes_to_exclude=nodes_to_exclude,
+            per_channel=per_channel,
+            reduce_range=reduce_range,
+            use_external_data_format=use_external_data_format,
+            extra_options=extra_options,
+        )
+        BaseConfig.__init__(self, white_list=white_list)
+        self.quant_last_matmul = kwargs.get("quant_last_matmul", True)
+        self.activation_type = quantization.QuantType.QUInt8
+        self.weight_sym = self.extra_options.get("WeightSymmetric", True)
+        self.activation_sym = self.extra_options.get("ActivationSymmetric", False)
+        self._post_init()
+
+    @staticmethod
+    def get_model_info(model) -> list:
+        if not isinstance(model, onnx.ModelProto):
+            model = onnx.load(model, load_external_data=False)
+ 
+        white_list = constants.DYNAMIC_OP_LIST
+        filter_result = []
+        for node in model.graph.node:
+            if node.op_type in white_list:
+                pair = (node.name, node.op_type)
+                filter_result.append(pair)
+        logger.debug(f"Get model info: {filter_result}")
+        return filter_result
+
+    def get_params_dict(self):
+        result = dict()
+        for param in self.params_list:
+            result[param] = getattr(self, param)
+        return result
+
+    def get_model_params_dict(self):
+        result = dict()
+        for param in self.model_params_list:
+            result[param] = getattr(self, param)
+        return result
+
+    def _post_init(self):
+        for op_name_or_type in self.white_list:
+            params = self.get_params_dict()
+            op_config = OperatorConfig(**params)
+            self.set_local(op_name_or_type, op_config.to_dict())
+
+    def to_config_mapping(self, config_list: list = None, model_info: list = None) -> OrderedDict:
+        config_mapping = OrderedDict()
+        if config_list is None:
+            config_list = [self]
+        for config in config_list:
+            # update model level setting
+            config_mapping.update(config.get_model_params_dict())
+
+            # update node level setting
+            global_config = config.global_config
+            op_type_config_dict, op_name_config_dict = config._get_op_name_op_type_config()
+            for op_name, op_type in model_info:
+                if op_type in op_type_config_dict:
+                    config_mapping[op_name] = op_type_config_dict[op_type]
+                for op_name_pattern in op_name_config_dict:
+                    if re.match(op_name_pattern, op_name):
+                        config_mapping[op_name] = op_name_config_dict[op_name_pattern]
+        return config_mapping
+
+    @classmethod
+    def get_config_set_for_tuning(cls, execution_provider=None) -> Union[None, "DynamicQuantConfig", List["DynamicQuantConfig"]]:  # pragma: no cover
+        if execution_provider is None:
+            execution_provider = utility.auto_detect_ep()
+        DynamicQuantConfig.register_supported_configs()
+        cfg = DynamicQuantConfig()
+        if execution_provider == "CPUExecutionProvider":
+            for optype in constants.DYNAMIC_OP_LIST:
+                for supported_config in DynamicQuantConfig.supported_configs:
+                    if optype in supported_config.operators:
+                        cfg.set_local(optype, supported_config.config.to_dict())
+                        break
+        return cfg
+
+
+    @classmethod
+    def register_supported_configs(cls) -> None:
+        supported_configs = []
+        supported_configs.append(
+            _OperatorConfig(
+                config=OperatorConfig(
+                    weight_type=onnx.TensorProto.UINT8,
+                    weight_sym=False,
+                    per_channel=False,
+                    activation_type=onnx.TensorProto.UINT8,
+                    activation_sym=False,
+                ),
+                operators=["FusedConv", "Conv", "EmbedLayerNormalization"]))
+        supported_configs.append(
+            _OperatorConfig(
+                config=OperatorConfig(
+                    weight_type=onnx.TensorProto.INT8,
+                    weight_sym=True,
+                    per_channel=[True, False],
+                    activation_type=onnx.TensorProto.UINT8,
+                    activation_sym=False,
+                ),
+                operators=["MatMul"]))
+        supported_configs.append(
+            _OperatorConfig(
+                config=OperatorConfig(
+                    weight_type=onnx.TensorProto.INT8,
+                    weight_sym=True,
+                    per_channel=False,
+                    activation_type=onnx.TensorProto.UINT8,
+                    activation_sym=False,
+                ),
+                operators=["Gather", "Attention", "LSTM"]))
+        cls.supported_configs = supported_configs
+
+    def to_dict(self):
+        return self.__dict__
 
 def generate_nc_sq_config(quant_config: quantization.StaticQuantConfig):
     extra_options = quant_config.extra_options

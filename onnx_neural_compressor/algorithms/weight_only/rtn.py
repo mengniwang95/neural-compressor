@@ -29,7 +29,7 @@ from onnx_neural_compressor import constants
 from onnx_neural_compressor import onnx_model
 from onnx_neural_compressor import utility
 from onnx_neural_compressor.algorithms.layer_wise import core
-from onnx_neural_compressor.algorithms.weight_only import utility as woq_utility
+from onnx_neural_compressor.algorithms import utility as quant_utils
 from packaging import version
 
 from typing import List, Union  # isort: skip
@@ -114,7 +114,7 @@ def rtn_quantize(
             k_blocks = (org_w_shape[0] - 1) // group_size + 1
             init_share_num = model.get_initializer_share_num(node.input[1])
 
-            weight = woq_utility.pad_tensor(weight, group_size, k_blocks)
+            weight = quant_utils.pad_tensor(weight, group_size, k_blocks)
 
             satisfy_MatMulNBits_condition = (
                 version.Version(ort.__version__) > constants.ONNXRT1161_VERSION and num_bits == 4
@@ -128,10 +128,10 @@ def rtn_quantize(
             ):  # pragma: no cover
                 # MatMulFpQ4 support 4 bits and 32 group_size with ort 1.16.0 and 1.16.1 versions, supported by CPU EP
                 # MatMulNBits supports 4 bits and 2^n group_size with ort > 1.16.1, supported by CPU EP AND CUDA EP
-                q_weight, scale, zp = woq_utility.quant_tensor(
+                q_weight, scale, zp = quant_utils.quant_tensor(
                     weight.T, num_bits, group_size, scheme, "uint", ratios.get(node.input[1], 1)
                 )
-                q_matmul_node, new_inits = woq_utility.make_matmul_weight_only_node(
+                q_matmul_node, new_inits = quant_utils.make_matmul_weight_only_node(
                     node=node,
                     weight_shape=org_w_shape,
                     num_bits=num_bits,
@@ -147,7 +147,7 @@ def rtn_quantize(
                 remove_nodes.append(node)
                 new_nodes.append(q_matmul_node)
             else:
-                q_weight = woq_utility.qdq_tensor(
+                q_weight = quant_utils.qdq_tensor(
                     weight.T, num_bits, group_size, scheme, "int", ratios.get(node.input[1], 1)
                 )
                 q_weight = np.reshape(q_weight, (org_w_shape[1], -1))
@@ -155,7 +155,7 @@ def rtn_quantize(
                 q_weight = q_weight[: org_w_shape[0], :].astype(dtype)
                 q_weight_tensor = onnx.helper.make_tensor(
                     name=node.input[1] + "_Q{}G{}".format(str(num_bits), str(group_size)),
-                    data_type=utility.dtype_mapping[str(dtype)],
+                    data_type=quant_utils.dtype_mapping[str(dtype)],
                     dims=weight.shape,
                     vals=q_weight.tobytes(),
                     raw=True,

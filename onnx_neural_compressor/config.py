@@ -512,11 +512,6 @@ class BaseConfig(ABC):
                     all_config_lst2.append(new_config)
         else:
             all_config_lst2 = all_config_lst
-<<<<<<< HEAD
-                
-=======
-
->>>>>>> 978de3cfec (support W8A8)
         logger.info("Expanded the %s and got %d configs.", self.__class__.name, len(all_config_lst2))
         return all_config_lst2
 
@@ -553,7 +548,7 @@ class BaseConfig(ABC):
 
     @staticmethod
     def _is_op_type(name: str) -> bool:
-        return name in constants.STATIC_OP_LIST or name in constants.DYNAMIC_OP_LIST
+        return name in constants.STATIC_QOPERATOR_CPU_OP_LIST or name in constants.DYNAMIC_OP_LIST
 
     @classmethod
     @abstractmethod
@@ -1366,12 +1361,8 @@ class StaticQuantConfig(BaseConfig, quantization.StaticQuantConfig):
     def get_model_info(model) -> list:
         if not isinstance(model, onnx.ModelProto):
             model = onnx.load(model, load_external_data=False)
-<<<<<<< HEAD
  
-=======
-
->>>>>>> 978de3cfec (support W8A8)
-        white_list = constants.STATIC_OP_LIST
+        white_list = constants.STATIC_QOPERATOR_CPU_OP_LIST
         filter_result = []
         for node in model.graph.node:
             if node.op_type in white_list:
@@ -1418,16 +1409,12 @@ class StaticQuantConfig(BaseConfig, quantization.StaticQuantConfig):
         return config_mapping
 
     @classmethod
-<<<<<<< HEAD
-    def get_config_set_for_tuning(cls) -> Union[None, "StaticQuantConfig", List["StaticQuantConfig"]]:  # pragma: no cover
-        return StaticQuantConfig(calibration_sampling_size=[50, 100])
-=======
     def get_config_set_for_tuning(cls, execution_provider=None, quant_format=quantization.QuantFormat.QOperator) -> Union[None, "StaticQuantConfig", List["StaticQuantConfig"]]:  # pragma: no cover
         if execution_provider is None:
             execution_provider = utility.auto_detect_ep()
         StaticQuantConfig.register_supported_configs()
         cfg = StaticQuantConfig()
-        op_list = utility.get_op_list(STATIC_QUANT, execution_provider, quant_format)
+        op_list = utility.get_op_list(execution_provider, quant_format)
         for optype in op_list:
             supported_config = [i for i in StaticQuantConfig.supported_configs if optype in i.operators]
             if len(supported_config) == 0:
@@ -1437,16 +1424,10 @@ class StaticQuantConfig(BaseConfig, quantization.StaticQuantConfig):
                 config = valid_func(config, execution_provider, quant_format)
             cfg.set_local(optype, config.to_dict())
         return config
->>>>>>> 978de3cfec (support W8A8)
 
     @classmethod
     def register_supported_configs(cls) -> None:
         supported_configs = []
-<<<<<<< HEAD
-        linear_rtn_config = StaticQuantConfig()
-        operators = ["MatMul"]
-        supported_configs.append(_OperatorConfig(config=linear_rtn_config, operators=operators))
-=======
         supported_configs.append(
             _OperatorConfig(
                 config=OperatorConfig(
@@ -1519,7 +1500,6 @@ class StaticQuantConfig(BaseConfig, quantization.StaticQuantConfig):
                     "Flatten", "Expand", "Slice", "Mod", "ReduceMax", "ReduceMin", "CenterCropPad"
                 ],
             ))
->>>>>>> 978de3cfec (support W8A8)
         cls.supported_configs = supported_configs
 
     def to_dict(self):
@@ -1558,7 +1538,7 @@ class DynamicQuantConfig(BaseConfig, quantization.DynamicQuantConfig):
         reduce_range: bool = False,
         use_external_data_format: bool = False,
         extra_options: dict = None,
-        white_list: List[Union[str, Callable]] = constants.DYNAMIC_OP_LIST,
+        white_list: List[Union[str, Callable]] = constants.DYNAMIC_CPU_OP_LIST,
         **kwargs,
     ):
         quantization.DynamicQuantConfig.__init__(
@@ -1584,7 +1564,7 @@ class DynamicQuantConfig(BaseConfig, quantization.DynamicQuantConfig):
         if not isinstance(model, onnx.ModelProto):
             model = onnx.load(model, load_external_data=False)
  
-        white_list = constants.DYNAMIC_OP_LIST
+        white_list = constants.DYNAMIC_CPU_OP_LIST
         filter_result = []
         for node in model.graph.node:
             if node.op_type in white_list:
@@ -1637,7 +1617,7 @@ class DynamicQuantConfig(BaseConfig, quantization.DynamicQuantConfig):
         DynamicQuantConfig.register_supported_configs()
         cfg = DynamicQuantConfig()
         if execution_provider == "CPUExecutionProvider":
-            for optype in constants.DYNAMIC_OP_LIST:
+            for optype in constants.DYNAMIC_CPU_OP_LIST:
                 for supported_config in DynamicQuantConfig.supported_configs:
                     if optype in supported_config.operators:
                         cfg.set_local(optype, supported_config.config.to_dict())

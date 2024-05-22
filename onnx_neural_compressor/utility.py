@@ -493,32 +493,29 @@ def auto_detect_ep():
     else:
         return "CPUExecutionProvider"
 
-def get_op_list(approach, execution_provider, quant_format=None):
+def get_op_list(execution_provider, quant_format=None):
     if execution_provider == "CPUExecutionProvider":
-        if quant_format == 
-            return constants.STATIC_OP_LIST
-        elif quant_format == 
-            return
+        if quant_format is None:
+            return constants.DYNAMIC_CPU_OP_LIST
         else:
-            return 
+            return constants.STATIC_QDQ_CPU_OP_LIST if quant_format == quantization.QuantFormat.QDQ else constants.STATIC_QOPERATOR_CPU_OP_LIST
     if execution_provider == "DnnlExecutionProvider":
-        if quant_format == 
-            return constants.STATIC_OP_LIST
-        elif quant_format == 
-            return
+        if quant_format is None:
+            return constants.DYNAMIC_DNNL_OP_LIST
         else:
-            return 
+            return constants.STATIC_QDQ_DNNL_OP_LIST if quant_format == quantization.QuantFormat.QDQ else constants.STATIC_QOPERATOR_DNNL_OP_LIST
     if execution_provider == "DmlExecutionProvider":
-        if quant_format == 
-            return constants.STATIC_OP_LIST
-        elif quant_format == 
-            return
+        if quant_format is None:
+            return constants.DYNAMIC_DML_OP_LIST
         else:
-            return 
+            return constants.STATIC_QDQ_DML_OP_LIST if quant_format == quantization.QuantFormat.QDQ else constants.STATIC_QOPERATOR_DML_OP_LIST
     if execution_provider == "CUDAExecutionProvider":
-        if quant_format == 
-            return constants.STATIC_OP_LIST
-        elif quant_format == 
-            return
+        if quant_format is None:
+            return constants.DYNAMIC_CUDA_OP_LIST
         else:
-            return 
+            return constants.STATIC_QDQ_CUDA_OP_LIST if quant_format == quantization.QuantFormat.QDQ else constants.STATIC_QOPERATOR_CUDA_OP_LIST
+    if execution_provider == "TensorrtExecutionProvider":
+        if quant_format is None:
+            return constants.DYNAMIC_TRT_OP_LIST
+        else:
+            return constants.STATIC_QDQ_TRT_OP_LIST if quant_format == quantization.QuantFormat.QDQ else constants.STATIC_QOPERATOR_TRT_OP_LIST

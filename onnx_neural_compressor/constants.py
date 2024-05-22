@@ -139,7 +139,7 @@ STATIC_QDQ_OP_LIST_MAP = {
     "TensorrtExecutionProvider": STATIC_QDQ_TRT_OP_LIST,
 }
 
-DYNAMIC_QOPERATOR_OP_LIST_MAP = {
+DYNAMIC_OP_LIST_MAP = {
     "CPUExecutionProvider": DYNAMIC_CPU_OP_LIST,
     "CUDAExecutionProvider": DYNAMIC_CUDA_OP_LIST,
     "DmlExecutionProvider": DYNAMIC_DML_OP_LIST,
@@ -147,4 +147,4 @@ DYNAMIC_QOPERATOR_OP_LIST_MAP = {
     "TensorrtExecutionProvider": DYNAMIC_TRT_OP_LIST,
 }
 
-STATIC_CPU_CHECK = 
+# STATIC_CPU_CHECK = 

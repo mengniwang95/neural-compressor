@@ -76,16 +76,19 @@ def _make_sub_graph(node, inits, input_data, output_data, opset, ir_version):
     return model
 
 
-def _quant_dequant_data(data, qType=3, scheme="sym"):
+def _quant_dequant_data(data, qType=3, sym=True):
     """Quantize and then dequantize data.
 
     Args:
         data (numpy.ndarray): target data
         qType (int): data type
-        scheme (str): sym or asym quantization
+        sym (bool): sym or asym quantization
     """
     rmin, rmax, zero_point, scale, quantized_data = quant_utils.quantize_data(
-        data.flatten().tolist(), quant_utils.get_qrange_for_qType(qType, False), qType, scheme
+        data.flatten().tolist(),
+        quant_utils.get_qmin_qmax_for_qType(qType, False, sym),
+        qType,
+        sym,
     )
     return ((quantized_data - zero_point) * scale).astype(data.dtype).reshape(data.shape)
 
@@ -207,7 +210,7 @@ class Smoother:
             self.model,
             self.dataloader,
             iterations=list(range(0, iterations)),
-            backend=self.providers,
+            execution_provider=self.providers,
         )
 
         self.max_vals_per_channel, self.shape_info, self.tensors_to_node = sq_calibrator.calib_smooth(
@@ -591,7 +594,7 @@ class Smoother:
             name = key + "_" + "smooth_scale"
             scale_tensor = onnx.helper.make_tensor(
                 name=key + "_" + "smooth_scale",
-                data_type=onnx.onnx_pb.TensorProto.FLOAT,
+                data_type=onnx.TensorProto.FLOAT,
                 dims=scale_factor.shape,
                 vals=scale_factor.flatten().tolist(),
             )

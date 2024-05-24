@@ -54,19 +54,19 @@ class Operator(object):
             True if onnx_node.op_type in onnx_quantizer.op_types_to_exclude_output_quantization else False
         )
         self.per_channel = False
-        self.algorithm = "minmax"
-        self.weight_scheme = "sym"
+        self.calibrate_method = "minmax"
+        self.weight_sym = True
         self.weight_dtype = None
         self.activation_dtype = None
-        self.activation_scheme = "asym"
+        self.activation_sym = False
         if self.node.name in self.quantizer.config:
             if self.quantizer.config[self.node.name] not in self.quantizer.fallback_list:
                 self.per_channel = self.quantizer.config[self.node.name]["per_channel"]
-                self.algorithm = self.quantizer.config[self.node.name]["calibrate_method"]
-                self.weight_scheme = "sym" if self.quantizer.config[self.node.name]["weight_sym"] else "asym"
+                self.calibrate_method = self.quantizer.config[self.node.name]["calibrate_method"]
+                self.weight_sym = self.quantizer.config[self.node.name]["weight_sym"]
                 self.weight_dtype = self.quantizer.config[self.node.name]["weight_type"]
                 self.activation_dtype = self.quantizer.config[self.node.name]["activation_type"]
-                self.activation_scheme = "sym" if self.quantizer.config[self.node.name]["activation_sym"] else "asym"
+                self.activation_sym = self.quantizer.config[self.node.name]["activation_sym"]
 
     def quantize_check(self):
         """Check if quantizaion can be done."""
@@ -76,7 +76,7 @@ class Operator(object):
         """Do quantizaion."""
         node = self.node
         self.quantizer.quantize_inputs(node)
-        if not self.disable_qdq_for_node_output or self.quantizer.mode != "qdq":
+        if not self.disable_qdq_for_node_output or self.quantizer.quant_format != "qdq":
             self.quantizer.quantize_outputs(node)
 
     def convert_check(self):

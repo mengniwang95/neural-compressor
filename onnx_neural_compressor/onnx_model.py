@@ -302,6 +302,15 @@ class ONNXModel(onnx_model.ONNXModel):
 
     def remove_unused_nodes(self):
         """Remove unused nodes."""
+        # remove duplicate nodes
+        new_nodes = []
+        for node in self.nodes():
+            if node not in new_nodes:
+                new_nodes.append(node)
+        self.model.graph.ClearField("node")
+        self.model.graph.node.extend(new_nodes)
+        self.update()
+
         unused_nodes = []
         nodes = self.nodes()
         if len(self._input_name_to_nodes) == 0:

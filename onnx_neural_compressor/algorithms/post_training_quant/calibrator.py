@@ -69,7 +69,7 @@ class CalibratorBase:
         return self._calib_min, self._calib_max
 
 
-@calib_registry(calib_method="minmax")
+@calib_registry(calib_method="MinMax")
 class MinMaxCalibrator(CalibratorBase):
     """MinMax calibrator class."""
 
@@ -106,10 +106,10 @@ class MinMaxCalibrator(CalibratorBase):
     @property
     def method_name(self):
         """Get calibration method name."""
-        return "minmax"
+        return "MinMax"
 
 
-@calib_registry(calib_method="percentile")
+@calib_registry(calib_method="Percentile")
 class PercentileCalibrator(CalibratorBase):
     """Percentile calibrator class.
 
@@ -160,12 +160,12 @@ class PercentileCalibrator(CalibratorBase):
     @property
     def method_name(self):
         """Get calibration method name."""
-        return "percentile"
+        return "Percentile"
 
 
-@calib_registry(calib_method="kl")
-class KLCalibrator(CalibratorBase):
-    """KL calibrator class.
+@calib_registry(calib_method="Entropy")
+class EntropyCalibrator(CalibratorBase):
+    """Entropy calibrator class.
 
     Args:
         num_bins (int, optional):number of bins to create a new histogram
@@ -174,8 +174,8 @@ class KLCalibrator(CalibratorBase):
     """
 
     def __init__(self, num_bins=128, num_quantized_bins=128):
-        """Initialize kl calibrator class."""
-        super(KLCalibrator, self).__init__()
+        """Initialize entropy calibrator class."""
+        super(EntropyCalibrator, self).__init__()
         self.collector = None
         self.num_bins = num_bins
         self.num_quantized_bins = num_quantized_bins
@@ -188,12 +188,12 @@ class KLCalibrator(CalibratorBase):
         self.compute_kl_range()
 
     def compute_kl_range(self):
-        """Compute kl range."""
+        """Compute entropy range."""
         histogram = self.collector.histogram
         self._calib_min, self._calib_max = self.get_kl_threshold(histogram, self.num_quantized_bins)
 
     def get_kl_threshold(self, histogram, num_quantized_bins):
-        """Compute kl threshold.
+        """Compute entropy threshold.
 
         Ref:
         https://github.com//apache/incubator-mxnet/blob/master/python/mxnet/contrib/quantization.py
@@ -289,7 +289,7 @@ class KLCalibrator(CalibratorBase):
     @property
     def method_name(self):
         """Get calibration method name."""
-        return "kl"
+        return "Entropy"
 
 
 class HistogramCollector:

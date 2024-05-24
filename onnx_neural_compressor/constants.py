@@ -146,5 +146,3 @@ DYNAMIC_OP_LIST_MAP = {
     "DnnlExecutionProvider": DYNAMIC_DNNL_OP_LIST,
     "TensorrtExecutionProvider": DYNAMIC_TRT_OP_LIST,
 }
-
-# STATIC_CPU_CHECK = 

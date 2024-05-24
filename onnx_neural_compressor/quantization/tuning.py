@@ -400,8 +400,6 @@ def _need_apply(quant_config: config.BaseConfig, algo_name):
     return quant_config.name == algo_name if hasattr(quant_config, "name") else False
 
 
-# * only for internal usage now
-@utility.log_quant_execution
 def _quantize(
     model_input: Union[pathlib.Path, str],
     quant_config: config.BaseConfig,
@@ -426,7 +424,7 @@ def _quantize(
         assert isinstance(
             quant_config, config.BaseConfig
         ), f"Please pass a dict or config instance as the quantization configuration, but got {type(quant_config)}."
-    logger.info(f"Quantize model with config: \n {quant_config} \n")
+    logger.debug(f"Quantize model with config: \n {quant_config} \n")
 
     # select quantization algo according to config
     q_model = None

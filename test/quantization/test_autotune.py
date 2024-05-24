@@ -26,6 +26,7 @@ import onnx
 import onnxruntime as ort
 from onnx_neural_compressor import config
 from onnx_neural_compressor import data_reader
+from onnx_neural_compressor import quantization
 from onnx_neural_compressor.quantization import tuning
 from optimum.exporters.onnx import main_export
 
@@ -75,16 +76,17 @@ class TestONNXRT3xAutoTune(unittest.TestCase):
 
     @classmethod
     def setUpClass(self):
-        main_export(
-            "hf-internal-testing/tiny-random-gptj",
-            output="gptj",
-        )
+        # main_export(
+        #     "hf-internal-testing/tiny-random-gptj",
+        #     output="gptj",
+        # )
         self.gptj = glob.glob(os.path.join("./gptj", "*.onnx"))[0]
         self.data_reader = DataReader(self.gptj)
 
     @classmethod
     def tearDownClass(self):
-        shutil.rmtree("./gptj", ignore_errors=True)
+        pass
+        # shutil.rmtree("./gptj", ignore_errors=True)
 
     @mock.patch("logging.Logger.warning")
     def test_auto_tune_warning(self, mock_warning):
@@ -382,6 +384,48 @@ class TestONNXRT3xAutoTune(unittest.TestCase):
         )
         self.assertIsNotNone(best_model)
 
+    def test_static_default_auto_tune(self):
+        partial_fake_eval = functools.partial(fake_eval, eval_result_lst=[1.0, 0.8, 0.82, 0.81, 1.0, 0.99])
+
+        custom_tune_config = tuning.TuningConfig(
+            config_set=config.StaticQuantConfig.get_config_set_for_tuning(
+                execution_provider="TensorrtExecutionProvider",
+                quant_format=quantization.QuantFormat.QDQ,
+            )
+        )
+        best_model = tuning.autotune(
+            model_input=self.gptj,
+            tune_config=custom_tune_config,
+            eval_fn=partial_fake_eval,
+            calibration_data_reader=self.data_reader,
+        )
+        optypes = [i.op_type for i in best_model.graph.node]
+        self.assertTrue("QLinearMatMul" not in optypes)
+        self.assertTrue("QuantizeLinear" in optypes)
+        self.assertTrue("MatMul" in optypes)
+        ort.InferenceSession(best_model.SerializeToString(), providers=["TensorrtExecutionProvider"])
+        self.assertIsNotNone(best_model)
+
+    def test_static_custom_auto_tune(self):
+        partial_fake_eval = functools.partial(fake_eval, eval_result_lst=[1.0, 0.8, 0.82, 0.81, 1.0, 0.99])
+        custom_tune_config = tuning.TuningConfig(
+            config_set=config.StaticQuantConfig(
+                per_channel=[True, False],
+                execution_provider="CPUExecutionProvider",
+                quant_format=quantization.QuantFormat.QOperator,
+            )
+        )
+        best_model = tuning.autotune(
+            model_input=self.gptj,
+            tune_config=custom_tune_config,
+            eval_fn=partial_fake_eval,
+            calibration_data_reader=self.data_reader,
+        )
+        optypes = [i.op_type for i in best_model.graph.node]
+        self.assertTrue("QLinearMatMul" in optypes)
+        self.assertTrue("QuantizeLinear" in optypes)
+        ort.InferenceSession(best_model.SerializeToString(), providers=["CPUExecutionProvider"])
+        self.assertIsNotNone(best_model)
 
 if __name__ == "__main__":
     unittest.main()

@@ -8,6 +8,7 @@ import onnx
 from onnx_neural_compressor import config
 from onnx_neural_compressor import logger
 from onnx_neural_compressor import utility
+from onnx_neural_compressor import quantization
 from onnx_neural_compressor.quantization import algorithm_entry as algos
 from onnx_neural_compressor.quantization import tuning
 from optimum.exporters.onnx import main_export
@@ -114,31 +115,99 @@ class TestQuantizationConfig(unittest.TestCase):
             for idx, quant_config in enumerate(config_loader):
                 model_info = quant_config.get_model_info(model=self.simple_onnx_model)
                 configs_mapping = quant_config.to_config_mapping(model_info=model_info)
+                self.assertTrue("add" not in configs_mapping)
+                self.assertTrue("add2" not in configs_mapping)
+                self.assertTrue("Matmul" not in configs_mapping)
 
             # only 1 config without op level quant config
             self.assertEqual(len(config_loader.config_set), 1)
 
     def test_static_quant_config(self):
-        tuning_config = tuning.TuningConfig(
-            config_set=config.StaticQuantConfig.get_config_set_for_tuning(
-                execution_provider="CPUExecutionProvider",
+        for execution_provider in ["CPUExecutionProvider", "CUDAExecutionProvider", "DnnlExecutionProvider"]:
+            tuning_config = tuning.TuningConfig(
+                config_set=config.StaticQuantConfig.get_config_set_for_tuning(
+                    execution_provider=execution_provider,
+                )
             )
-        )
-        config_loader = tuning.ConfigLoader(config_set=tuning_config.config_set, sampler=tuning_config.sampler)
-        for idx, quant_config in enumerate(config_loader):
-            model_info = quant_config.get_model_info(model=self.simple_onnx_model)
-            configs_mapping = quant_config.to_config_mapping(model_info=model_info)
-            if idx in [0, 2, 4]:
-                self.assertTrue(configs_mapping["Matmul"]["per_channel"])
-            elif idx in [1, 3, 5]:
+            config_loader = tuning.ConfigLoader(config_set=tuning_config.config_set, sampler=tuning_config.sampler)
+            for idx, quant_config in enumerate(config_loader):
+                model_info = quant_config.get_model_info(model=self.simple_onnx_model)
+                configs_mapping = quant_config.to_config_mapping(model_info=model_info)
+                if idx in [0, 2, 4]:
+                    self.assertTrue(configs_mapping["Matmul"]["per_channel"])
+                elif idx in [1, 3, 5]:
+                    self.assertFalse(configs_mapping["Matmul"]["per_channel"])
+                if idx in [0, 1]:
+                    self.assertEqual(configs_mapping["add"]["calibrate_method"], quantization.CalibrationMethod.MinMax)
+                elif idx in [2, 3]:
+                    self.assertEqual(configs_mapping["add"]["calibrate_method"], quantization.CalibrationMethod.Entropy)
+                elif idx in [4, 5]:
+                    self.assertEqual(configs_mapping["add"]["calibrate_method"], quantization.CalibrationMethod.Percentile)
+                self.assertLess(idx, 6)
+
+        for execution_provider in ["TensorrtExecutionProvider"]:
+            tuning_config = tuning.TuningConfig(
+                config_set=config.StaticQuantConfig.get_config_set_for_tuning(
+                    execution_provider=execution_provider,
+                    quant_format=quantization.QuantFormat.QOperator,
+                )
+            )
+            config_loader = tuning.ConfigLoader(config_set=tuning_config.config_set, sampler=tuning_config.sampler)
+            for idx, quant_config in enumerate(config_loader):
+                model_info = quant_config.get_model_info(model=self.simple_onnx_model)
+                configs_mapping = quant_config.to_config_mapping(model_info=model_info)
+                self.assertTrue("add" not in configs_mapping)
+                self.assertTrue("add2" not in configs_mapping)
+                self.assertTrue("Matmul" not in configs_mapping)
+
+            # only 1 config without op level quant config
+            self.assertEqual(len(config_loader.config_set), 1)
+
+        for execution_provider in ["DmlExecutionProvider"]:
+            tuning_config = tuning.TuningConfig(
+                config_set=config.StaticQuantConfig.get_config_set_for_tuning(
+                    execution_provider=execution_provider,
+                )
+            )
+            config_loader = tuning.ConfigLoader(config_set=tuning_config.config_set, sampler=tuning_config.sampler)
+            for idx, quant_config in enumerate(config_loader):
+                model_info = quant_config.get_model_info(model=self.simple_onnx_model)
+                configs_mapping = quant_config.to_config_mapping(model_info=model_info)
                 self.assertFalse(configs_mapping["Matmul"]["per_channel"])
-            if idx in [0, 1]:
-                self.assertEqual(configs_mapping["add"]["calibrate_method"], "minmax")
-            elif idx in [2, 3]:
-                self.assertEqual(configs_mapping["add"]["calibrate_method"], "kl")
-            elif idx in [4, 5]:
-                self.assertEqual(configs_mapping["add"]["calibrate_method"], "percentile")
-            self.assertLess(idx, 6)
+                if idx in [0]:
+                    self.assertEqual(configs_mapping["add"]["calibrate_method"], quantization.CalibrationMethod.MinMax)
+                elif idx in [1]:
+                    self.assertEqual(configs_mapping["add"]["calibrate_method"], quantization.CalibrationMethod.Entropy)
+                elif idx in [2]:
+                    self.assertEqual(configs_mapping["add"]["calibrate_method"], quantization.CalibrationMethod.Percentile)
+                self.assertLess(idx, 3)
+
+        for execution_provider in ["TensorrtExecutionProvider"]:
+            tuning_config = tuning.TuningConfig(
+                config_set=config.StaticQuantConfig.get_config_set_for_tuning(
+                    execution_provider=execution_provider,
+                    quant_format=quantization.QuantFormat.QDQ,
+                )
+            )
+            config_loader = tuning.ConfigLoader(config_set=tuning_config.config_set, sampler=tuning_config.sampler)
+            for idx, quant_config in enumerate(config_loader):
+                model_info = quant_config.get_model_info(model=self.simple_onnx_model)
+                configs_mapping = quant_config.to_config_mapping(model_info=model_info)
+                if idx in [0, 2, 4]:
+                    self.assertFalse(configs_mapping["Matmul"]["per_channel"])
+                elif idx in [1, 3, 5]:
+                    self.assertTrue(configs_mapping["Matmul"]["per_channel"])
+                if idx in [0, 1]:
+                    self.assertEqual(configs_mapping["add"]["calibrate_method"], quantization.CalibrationMethod.MinMax)
+                elif idx in [2, 3]:
+                    self.assertEqual(configs_mapping["add"]["calibrate_method"], quantization.CalibrationMethod.Entropy)
+                elif idx in [4, 5]:
+                    self.assertEqual(configs_mapping["add"]["calibrate_method"], quantization.CalibrationMethod.Percentile)
+                self.assertTrue(configs_mapping["add"]["weight_sym"])
+                self.assertTrue(configs_mapping["add"]["activation_sym"])
+                self.assertTrue(configs_mapping["Matmul"]["weight_sym"])
+                self.assertTrue(configs_mapping["Matmul"]["activation_sym"])
+                self.assertLess(idx, 6)
 
     def test_config_white_lst(self):
         global_config = config.RTNConfig(weight_bits=4)

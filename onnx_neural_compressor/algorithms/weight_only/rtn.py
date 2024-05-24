@@ -40,7 +40,7 @@ def rtn_quantize(
     weight_config: dict = {},
     num_bits: int = 4,
     group_size: int = 32,
-    scheme: str = "asym",
+    sym: bool = False,
     ratios: dict = {},
     accuracy_level: int = 0,
     providers: List[str] = ["CPUExecutionProvider"],
@@ -64,7 +64,7 @@ def rtn_quantize(
             }. Defaults to {}.
         num_bits (int, optional): number of bits used to represent weights. Defaults to 4.
         group_size (int, optional): size of weight groups. Defaults to 32.
-        scheme (str, optional): indicates whether weights are symmetric. Defaults to "asym".
+        sym (bool, optional): indicates whether weights are symmetric. Defaults to False.
         ratios (dict, optional): percentile of clip. Defaults to {}.
         accuracy_level (int, optional):
             accuracy level. Support 0 (unset), 1(fp32 compute type of jblas kernel),
@@ -105,7 +105,7 @@ def rtn_quantize(
             if (node.name, node.op_type) in weight_config:
                 num_bits = weight_config[(node.name, node.op_type)].get("weight_bits", 4)
                 group_size = weight_config[(node.name, node.op_type)].get("weight_group_size", 32)
-                scheme = "sym" if weight_config[(node.name, node.op_type)].get("weight_sym", True) else "asym"
+                sym = weight_config[(node.name, node.op_type)].get("weight_sym", True)
                 accuracy_level = weight_config[(node.name, node.op_type)].get("accuracy_level", 0)
 
             org_w_shape = weight.shape  # ic, oc
@@ -129,7 +129,7 @@ def rtn_quantize(
                 # MatMulFpQ4 support 4 bits and 32 group_size with ort 1.16.0 and 1.16.1 versions, supported by CPU EP
                 # MatMulNBits supports 4 bits and 2^n group_size with ort > 1.16.1, supported by CPU EP AND CUDA EP
                 q_weight, scale, zp = quant_utils.quant_tensor(
-                    weight.T, num_bits, group_size, scheme, "uint", ratios.get(node.input[1], 1)
+                    weight.T, num_bits, group_size, sym, "uint", ratios.get(node.input[1], 1)
                 )
                 q_matmul_node, new_inits = quant_utils.make_matmul_weight_only_node(
                     node=node,
@@ -139,7 +139,7 @@ def rtn_quantize(
                     k_blocks=k_blocks,
                     q_weight=q_weight.astype("uint8"),
                     scale=scale.astype(dtype),
-                    zero_point=zp if scheme == "asym" else None,
+                    zero_point=zp if not sym else None,
                     accuracy_level=accuracy_level,
                 )
 
@@ -148,7 +148,7 @@ def rtn_quantize(
                 new_nodes.append(q_matmul_node)
             else:
                 q_weight = quant_utils.qdq_tensor(
-                    weight.T, num_bits, group_size, scheme, "int", ratios.get(node.input[1], 1)
+                    weight.T, num_bits, group_size, sym, "int", ratios.get(node.input[1], 1)
                 )
                 q_weight = np.reshape(q_weight, (org_w_shape[1], -1))
                 q_weight = np.transpose(q_weight)

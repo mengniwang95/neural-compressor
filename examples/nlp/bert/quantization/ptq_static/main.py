@@ -29,8 +29,7 @@ from onnx_neural_compressor import data_reader
 from typing import List, Optional, Union
 from torch.utils import data
 from onnx_neural_compressor import config
-from onnx_neural_compressor.quantization import quantize
-from onnx_neural_compressor.quantization import QuantFormat
+from onnx_neural_compressor import quantization
 from onnxruntime.transformers import optimizer
 from onnxruntime.transformers.fusion_options import FusionOptions
 
@@ -404,7 +403,7 @@ class DataReader(data_reader.CalibrationDataReader):
 
 if __name__ == "__main__":
     # set config for npu test
-    backend = 'onnxrt_dml_ep' if args.device == 'npu' else 'default'
+    provider = "DmlExecutionProvider" if args.device == "npu" else "CPUExecutionProvider"
 
     if args.benchmark:
         model = onnx.load(args.model_path)
@@ -424,7 +423,6 @@ if __name__ == "__main__":
 
         def eval_func(model):
             metric = ONNXRTGLUE(args.task)
-            provider = 'DmlExecutionProvider' if backend == 'onnxrt_dml_ep' else 'CPUExecutionProvider'
             session = onnxruntime.InferenceSession(model.SerializeToString(), providers=[provider])
             ort_inputs = {}
             len_inputs = len(session.get_inputs())
@@ -446,7 +444,7 @@ if __name__ == "__main__":
                 metric.update(predictions[0], labels)
             return metric.result()
 
-        if args.mode == 'performance':            
+        if args.mode == 'performance':
             total_time = 0.0
             num_iter = 100
             num_warmup = 10
@@ -511,9 +509,9 @@ if __name__ == "__main__":
         calibration_data_reader = DataReader(args.model_path, calibration_sampling_size=8)
         config = config.StaticQuantConfig(
             calibration_data_reader=calibration_data_reader,
-            quant_format=QuantFormat.QOperator if args.quant_format == "QOperator" else QuantFormat.QDQ,
+            quant_format=quantization.QuantFormat.QOperator if args.quant_format == "QOperator" else quantization.QuantFormat.QDQ,
             calibration_sampling_size=8,
             extra_options={"optypes_to_exclude_output_quant": ["MatMul", "Gemm", "Attention", "FusedGemm"]},
-            execution_provider=backend
+            execution_provider=provider,
         )
-        quantize(model, args.output_model, config)
+        quantization.quantize(model, args.output_model, config)

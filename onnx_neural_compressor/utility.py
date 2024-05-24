@@ -27,6 +27,7 @@ import prettytable as pt
 import psutil
 from onnx_neural_compressor import constants
 from onnx_neural_compressor import logger
+from onnxruntime import quantization
 from onnxruntime.quantization import onnx_model
 
 from typing import Callable, Dict, List, Tuple, Union  # isort: skip
@@ -142,46 +143,6 @@ class Options:
 
 
 options = Options()
-
-
-class TuningLogger:
-    """A unified logger for the tuning/quantization process.
-
-    It assists validation teams in retrieving logs.
-    """
-
-    @classmethod
-    def tuning_start(cls) -> None:
-        logger.info("Tuning started.")
-
-    @classmethod
-    def trial_start(cls, trial_index: int = None) -> None:
-        logger.info("%d-trail started.", trial_index)
-
-    @classmethod
-    def quantization_start(cls, stacklevel=2) -> None:
-        logger.info("Quantization started.", stacklevel=stacklevel)
-
-    @classmethod
-    def quantization_end(cls, stacklevel=2) -> None:
-        logger.info("Quantization end.", stacklevel=stacklevel)
-
-    @classmethod
-    def evaluation_start(cls) -> None:
-        logger.info("Evaluation started.")
-
-    @classmethod
-    def evaluation_end(cls) -> None:
-        logger.info("Evaluation end.")
-
-    @classmethod
-    def trial_end(cls, trial_index: int = None) -> None:
-        logger.info("%d-trail end.", trial_index)
-
-    @classmethod
-    def tuning_end(cls) -> None:
-        logger.info("Tuning completed.")
-
 
 def singleton(cls):
     """Singleton decorator."""
@@ -379,21 +340,6 @@ def set_resume_from(resume_from: str):
     options.resume_from = resume_from
 
 
-def log_quant_execution(func):
-    default_tuning_logger = TuningLogger()
-
-    def wrapper(*args, **kwargs):
-        default_tuning_logger.quantization_start(stacklevel=4)
-
-        # Call the original function
-        result = func(*args, **kwargs)
-
-        default_tuning_logger.quantization_end(stacklevel=4)
-        return result
-
-    return wrapper
-
-
 def find_by_name(name, item_list):
     """Helper function to find item by name in a list."""
     items = []
@@ -457,21 +403,6 @@ def get_model_info(
     return filter_result
 
 
-def get_qrange_for_qType(qType, reduce_range=False):
-    """Helper function to get the quantization range for a type.
-
-    Args:
-        qType (int): data type
-        reduce_range (bool, optional): use 7 bit or not. Defaults to False.
-    """
-    if qType == onnx.onnx_pb.TensorProto.UINT8:
-        return 127 if reduce_range else 255
-    elif qType == onnx.onnx_pb.TensorProto.INT8:
-        # [-64, 64] for reduce_range, and [-127, 127] full_range.
-        return 128 if reduce_range else 254
-    else:
-        raise ValueError("unsupported quantization data type")
-
 def check_model_with_infer_shapes(model):
     """Check if the model has been shape inferred."""
     if isinstance(model, (pathlib.Path, str)):
@@ -493,29 +424,106 @@ def auto_detect_ep():
     else:
         return "CPUExecutionProvider"
 
-def get_op_list(execution_provider, quant_format=None):
-    if execution_provider == "CPUExecutionProvider":
-        if quant_format is None:
-            return constants.DYNAMIC_CPU_OP_LIST
-        else:
-            return constants.STATIC_QDQ_CPU_OP_LIST if quant_format == quantization.QuantFormat.QDQ else constants.STATIC_QOPERATOR_CPU_OP_LIST
-    if execution_provider == "DnnlExecutionProvider":
-        if quant_format is None:
-            return constants.DYNAMIC_DNNL_OP_LIST
-        else:
-            return constants.STATIC_QDQ_DNNL_OP_LIST if quant_format == quantization.QuantFormat.QDQ else constants.STATIC_QOPERATOR_DNNL_OP_LIST
-    if execution_provider == "DmlExecutionProvider":
-        if quant_format is None:
-            return constants.DYNAMIC_DML_OP_LIST
-        else:
-            return constants.STATIC_QDQ_DML_OP_LIST if quant_format == quantization.QuantFormat.QDQ else constants.STATIC_QOPERATOR_DML_OP_LIST
-    if execution_provider == "CUDAExecutionProvider":
-        if quant_format is None:
-            return constants.DYNAMIC_CUDA_OP_LIST
-        else:
-            return constants.STATIC_QDQ_CUDA_OP_LIST if quant_format == quantization.QuantFormat.QDQ else constants.STATIC_QOPERATOR_CUDA_OP_LIST
-    if execution_provider == "TensorrtExecutionProvider":
-        if quant_format is None:
-            return constants.DYNAMIC_TRT_OP_LIST
-        else:
-            return constants.STATIC_QDQ_TRT_OP_LIST if quant_format == quantization.QuantFormat.QDQ else constants.STATIC_QOPERATOR_TRT_OP_LIST
+def static_basic_check(config, optype, execution_provider, quant_format):
+    if quant_format == quantization.QuantFormat.QOperator:
+        if execution_provider not in constants.STATIC_QOPERATOR_OP_LIST_MAP:
+            raise ValueError("Unsupported execution_provider {}, only support {}.".format(execution_provider, list(constants.STATIC_QOPERATOR_OP_LIST_MAP.keys())))
+        supported_optype = constants.STATIC_QOPERATOR_OP_LIST_MAP[execution_provider]
+        if optype not in supported_optype:
+            raise ValueError("Unsupported optype {} for {}, only support {}.".format(optype, execution_provider, supported_optype))
+    elif quant_format == quantization.QuantFormat.QDQ:
+        if execution_provider not in constants.STATIC_QDQ_OP_LIST_MAP:
+            raise ValueError("Unsupported execution_provider {}, only support {}.".format(execution_provider, list(constants.STATIC_QDQ_OP_LIST_MAP.keys())))
+        supported_optype = constants.STATIC_QDQ_OP_LIST_MAP[execution_provider]
+        if optype not in supported_optype:
+            raise ValueError("Unsupported optype {} for {}, only support {}.".format(optype, execution_provider, supported_optype))
+    else:
+        raise ValueError("Unsupported quant_format {}, only support QuantFormat.QOperator and QuantFormat.QDQ.".format(quant_format))
+    return config
+
+def static_cpu_check(config, optype, execution_provider, quant_format):
+    # default config is for CPU EP
+    return config
+
+def static_cuda_check(config, optype, execution_provider, quant_format):
+    # current configurations are same as CPU EP
+    return config
+
+def static_dml_check(config, optype, execution_provider, quant_format):
+    if execution_provider != "DmlExecutionProvider":
+        return config
+
+    # dont't support per-channel
+    if optype in ["Conv", "MatMul"]:
+        setattr(config, "per_channel", False)
+    return config
+
+def static_dnnl_check(config, optype, execution_provider, quant_format):
+    # current configurations are same as CPU EP
+    return config
+
+def static_trt_check(config, optype, execution_provider, quant_format):
+    if execution_provider != "TensorrtExecutionProvider":
+        return config
+
+    # only support S8S8
+    if optype in ["Conv", "MatMul", "Gather", "Gemm"]:
+        setattr(config, "weight_type", onnx.TensorProto.INT8)
+        setattr(config, "weight_sym", True)
+        setattr(config, "activation_type", onnx.TensorProto.INT8)
+        setattr(config, "activation_sym", True)
+        setattr(config, "per_channel", [False, True])
+    else:
+        setattr(config, "weight_type", onnx.TensorProto.INT8)
+        setattr(config, "weight_sym", True)
+        setattr(config, "activation_type", onnx.TensorProto.INT8)
+        setattr(config, "activation_sym", True)
+    return config
+
+STATIC_CHECK_FUNC_LIST = [
+    static_basic_check,
+    static_cpu_check,
+    static_cuda_check,
+    static_dml_check,
+    static_dnnl_check,
+    static_trt_check,
+]
+
+
+def dynamic_basic_check(config, optype, execution_provider, quant_format=None):
+    if execution_provider not in constants.DYNAMIC_OP_LIST_MAP:
+        raise ValueError("Unsupported execution_provider {}, only support {}.".format(execution_provider, list(constants.DYNAMIC_OP_LIST_MAP.keys())))
+
+    supported_optype = constants.DYNAMIC_OP_LIST_MAP[execution_provider]
+    if optype not in supported_optype:
+        raise ValueError("Unsupported optype {} for {}, only support {}.".format(optype, execution_provider, supported_optype))
+    return config
+
+def dynamic_cpu_check(config, optype, execution_provider, quant_format=None):
+    # default config is for CPU EP
+    return config
+
+def dynamic_cuda_check(config, optype, execution_provider, quant_format=None):
+    # current configurations are same as CPU EP
+    return config
+
+def dynamic_dml_check(config, optype, execution_provider, quant_format=None):
+    # current configurations are same as CPU EP
+    return config
+
+def dynamic_dnnl_check(config, optype, execution_provider, quant_format=None):
+    # current configurations are same as CPU EP
+    return config
+
+def dynamic_trt_check(config, optype, execution_provider, quant_format=None):
+    # current configurations are same as CPU EP
+    return config
+
+DYNAMIC_CHECK_FUNC_LIST = [
+    dynamic_basic_check,
+    dynamic_cpu_check,
+    dynamic_cuda_check,
+    dynamic_dml_check,
+    dynamic_dnnl_check,
+    dynamic_trt_check,
+]

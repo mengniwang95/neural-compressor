@@ -48,7 +48,7 @@ class MatMulOperator(base_op.Operator):
         node = self.node
         self.quantizer.quantize_inputs(node, [0])
         if self.per_channel and utility.find_by_name(node.input[1], self.quantizer.model.initializer()):
-            self.quantizer.quantize_weights_per_channel(node, [1], self.weight_dtype, self.weight_scheme, 1)
+            self.quantizer.quantize_weights_per_channel(node, [1], self.weight_dtype, self.weight_sym, 1)
         else:
             self.quantizer.quantize_inputs(node, [1])
 
@@ -130,7 +130,7 @@ class StaticMatMulOperator(MatMulOperator):
         node = self.node
         self.quantizer.quantize_inputs(node, [0])
         if self.per_channel and utility.find_by_name(node.input[1], self.quantizer.model.initializer()):
-            self.quantizer.quantize_weights_per_channel(node, [1], self.weight_dtype, self.weight_scheme, 1)
+            self.quantizer.quantize_weights_per_channel(node, [1], self.weight_dtype, self.weight_sym, 1)
         else:
             self.quantizer.quantize_inputs(node, [1])
 

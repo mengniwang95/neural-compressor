@@ -34,6 +34,7 @@ import onnxruntime
 from packaging import version
 from onnx_neural_compressor.algorithms.post_training_quant import calibrator
 from onnx_neural_compressor.algorithms import utility as quant_utils
+from onnx_neural_compressor import quantization
 from onnx_neural_compressor import onnx_model
 from onnx_neural_compressor import logger
 if sys.version_info < (3, 11) and util.find_spec("onnxruntime_extensions"):
@@ -54,7 +55,7 @@ class ONNXRTAugment:
         black_nodes=[],
         white_nodes=[],
         iterations=[],
-        backend="CPUExecutionProvider",
+        execution_provider="CPUExecutionProvider",
         reduce_range=False,
         **kwargs,
     ):
@@ -67,7 +68,7 @@ class ONNXRTAugment:
             black_nodes (list, optional): operator names that should not be quantized. Defaults to [].
             white_nodes (list, optional): operator names that force to be quantized. Defaults to [].
             iterations (list, optional): tensor of which iteration will be collected. Defaults to [].
-            backend (list, optional): execution provider for onnxruntime. Defaults to ['CPUExecutionProvider'].
+            execution_provider (list, optional): execution provider for onnxruntime. Defaults to 'CPUExecutionProvider'.
             reduce_range (bool, optional): use 7 bit or not. Defaults to False.
         """
         self.model_wrapper = model_wrapper if isinstance(model_wrapper, onnx_model.ONNXModel) else onnx_model.ONNXModel(model_wrapper, load_external_data=True)
@@ -80,23 +81,13 @@ class ONNXRTAugment:
         self.white_nodes = white_nodes
         self.augmented_model = None
         self.iterations = iterations
-        self.backend = backend
+        self.execution_provider = execution_provider
         self.augment_nodes = []
         self.dequantized_output = {}
         self.already_quantized = "DequantizeLinear" in [node.op_type for node in self.model.graph.node]
         self.dynamically_quantized = False
         self.ort_version = version.Version(onnxruntime.__version__)
         self.reduce_range = reduce_range
-
-        self.layer_wise = True if len(kwargs.get("split_model_input_names", [])) != 0 else False
-        if self.layer_wise:
-            self.split_model_input_names = kwargs.get("split_model_input_names", [])
-            self._dataloder_for_next_split_model = None
-
-    @property
-    def dataloder_for_next_split_model(self):
-        """Return dataloader for next split model for layer-wise quantization."""
-        return self._dataloder_for_next_split_model
 
     def augment_graph(self):
         """Augment_graph.
@@ -236,11 +227,11 @@ class ONNXRTAugment:
         if sys.version_info < (3, 11) and util.find_spec("onnxruntime_extensions"):
             so.register_custom_ops_library(onnxruntime_extensions.get_library_path())
 
-        backend = self.backend if self.backend != "TensorrtExecutionProvider" else "CUDAExecutionProvider"
+        execution_provider = self.execution_provider if self.execution_provider != "TensorrtExecutionProvider" else "CUDAExecutionProvider"
         session = (
-            onnxruntime.InferenceSession(self.augmented_model.SerializeToString(), so, providers=[backend])
+            onnxruntime.InferenceSession(self.augmented_model.SerializeToString(), so, providers=[execution_provider])
             if not self.model_wrapper.is_large_model
-            else onnxruntime.InferenceSession(self.model_wrapper.model_path + "_augment.onnx", so, providers=[backend])
+            else onnxruntime.InferenceSession(self.model_wrapper.model_path + "_augment.onnx", so, providers=[execution_provider])
         )
 
         len_inputs = len(session.get_inputs())
@@ -280,9 +271,7 @@ class ONNXRTAugment:
                     node_name = name_to_node[node_output_names[output_idx]]
                     if node_output_names[output_idx] not in name_to_calibrator:
                         calib_method = (
-                            q_config[node_name]["activation"]["algorithm"]
-                            if q_config and node_name in q_config and "activation" in q_config[node_name]
-                            else "minmax"
+                            q_config[node_name]["calibrate_method"].name if q_config and node_name in q_config else quantization.CalibrationMethod.MinMax.name
                         )
                         assert calib_method in calibrator.CALIBRATOR, "Calibration method {} is not registered.".format(
                             calib_method
@@ -293,9 +282,9 @@ class ONNXRTAugment:
 
                     # currently, the calibration range for each iteration is collected if
                     # the calibration method is minmax, otherwise the tensor data is collected.
-                    # TODO: for kl and percentile method, need to support range collection
+                    # TODO: for entropy and percentile method, need to support range collection
                     # per iteration in the future.
-                    if _calibrator.method_name == "minmax":
+                    if _calibrator.method_name == quantization.CalibrationMethod.MinMax.name:
                         _calibrator.collect(output)
                         activation_tensors_calib_range[node_output_names[output_idx]] = [
                             list(_calibrator.calib_range)
@@ -323,17 +312,17 @@ class ONNXRTAugment:
                 _collect_data(inputs)
             idx += 1
 
-        # for kl and percentile method, collect calibration range after all tensors are collected.
+        # for entropy and percentile method, collect calibration range after all tensors are collected.
         merged_dict = intermediate_tensor
         for (output_name, node_name), datas in merged_dict.items():
             if any([data is None for data in datas]):
                 continue
+            if any([data.dtype in [bool] for data in datas]): # output type of some ops is bool, skip
+                continue
             calib_method = (
-                q_config[node_name]["activation"]["algorithm"]
-                if q_config and node_name in q_config and "activation" in q_config[node_name]
-                else "minmax"
+                q_config[node_name]["calibrate_method"].name if q_config and node_name in q_config else quantization.CalibrationMethod.MinMax.name
             )
-            _calibrator = _calibrator.CALIBRATOR[calib_method]()
+            _calibrator = calibrator.CALIBRATOR[calib_method]()
             _calibrator.collect(datas)
             activation_tensors_calib_range.setdefault(output_name, []).append(list(_calibrator.calib_range))
             _calibrator.clear()
@@ -388,8 +377,6 @@ class ONNXRTAugment:
 
         weight_tensors_calib_range = {}
         for initializer_tensor_name in initializer_tensors_to_dump:
-            if self.layer_wise:
-                self.model_wrapper.load_model_initializer_by_tensor()
             initializer_tensor = self.model_wrapper.get_initializer(initializer_tensor_name)
 
             # double check initializer tensor is not None
@@ -402,7 +389,7 @@ class ONNXRTAugment:
                     os.path.dirname(self.model_wrapper.model_path) if self.model_wrapper.model_path is not None else ""
                 ),
             )
-            _calibrator = calibrator.CALIBRATOR["minmax"]()  # use minmax method to calibrate initializer tensors
+            _calibrator = calibrator.CALIBRATOR[quantization.CalibrationMethod.MinMax.name]()  # use minmax method to calibrate initializer tensors
             if initializer_tensor.flatten().size > 0:
                 _calibrator.collect(initializer_tensor)
                 weight_tensors_calib_range[initializer_tensor_name] = [list(_calibrator.calib_range)]
@@ -448,7 +435,7 @@ class ONNXRTAugment:
                     "or upgrade model opset version to 13 or higher".format(weight_tensor_name)
                 )
                 return [], None
-            node = self.model_wrapper.input_name_to_nodes[weight_tensor_name][0]
+            node = self.model_wrapper.input_name_to_nodes()[weight_tensor_name][0]
             if "Conv" in node.op_type or ("Gemm" in node.op_type and quant_utils.is_B_transposed(node)):
                 added_nodes, added_output = self._add_dequantize_transpose_node(
                     weight_tensor_name, scale_tensor, zo_tensor, len(weight_tensor.dims)
@@ -572,15 +559,15 @@ class ONNXRTAugment:
                 if len(children) == 1:
                     child = children[0]
             parent = None
-            scheme = "asym"
+            sym = False
             qType = 2  # uint8
             if tensor_name in output_name_to_nodes:
                 parent = output_name_to_nodes[tensor_name]
             if parent and parent.name in q_config and q_config[parent.name] not in ["fp32", "fp16", "bf16"]:
-                scheme = q_config[parent.name]["activation_sym"]
+                sym = q_config[parent.name]["activation_sym"]
                 qType = q_config[parent.name]["activation_type"]
-            elif self.backend in ["TensorrtExecutionProvider"]:
-                scheme = True # sym
+            elif self.execution_provider in ["TensorrtExecutionProvider"]:
+                sym = True # sym
                 qType = 3
             node_thresholds = quantization_thresholds[tensor_name]
             node_params = self.calculate_scale_zeropoint(
@@ -588,15 +575,15 @@ class ONNXRTAugment:
                 child,
                 node_thresholds[0],
                 node_thresholds[1],
-                scheme,
+                sym,
                 qType,
-                quant_utils.get_qrange_for_qType(qType, self.reduce_range),
+                quant_utils.get_qmin_qmax_for_qType(qType, self.reduce_range, sym),
             )
             quantization_params[tensor_name] = node_params
 
         return quantization_params
 
-    def calculate_scale_zeropoint(self, last_node, next_node, rmin, rmax, scheme, qType, quantize_range):
+    def calculate_scale_zeropoint(self, last_node, next_node, rmin, rmax, sym, qType, quantize_range):
         """Given the source and destination node of tensor, return calculated zero point and scales."""
         zp_and_scale = []
         # adjust rmin and rmax such that 0 is included in the range. This is required
@@ -627,20 +614,16 @@ class ONNXRTAugment:
                     if attrs[attrs_names.index("activation")].s == b"Clip":
                         assert (
                             "activation_params" in attrs_names
-                        ), "the model contains no \
-                                                                   params for clip node \
-                                                                   {}".format(
-                            last_node
-                        )
+                        ), "the model contains no params for clip node {}".format(last_node)
                         clip_params = attrs[attrs_names.index("activation_params")].floats
                         rmin = min(rmin, clip_params[0], clip_params[1])
                         rmax = max(rmax, clip_params[0], clip_params[1])
 
-        scale, zp = quant_utils.calculate_scale_zp(rmin, rmax, quantize_range, qType, scheme)
+        scale, zp = quant_utils.calculate_scale_zp(rmin, rmax, quantize_range, qType, sym)
         if qType == 2:
-            zp_and_scale.append(np.uint8(zp))
+            zp_and_scale.append(np.array(zp).astype(np.uint8))
         else:
-            zp_and_scale.append(np.int8(zp))
+            zp_and_scale.append(np.array(zp).astype(np.int8))
         zp_and_scale.append(np.float32(scale))
 
         return zp_and_scale

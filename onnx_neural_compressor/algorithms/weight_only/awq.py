@@ -42,7 +42,7 @@ def _get_weight_scale(weight, group_size):
     return scale
 
 
-def _apply_awq_scale(model, weight_config, absorb_pairs, output_dicts, num_bits, group_size, scheme):
+def _apply_awq_scale(model, weight_config, absorb_pairs, output_dicts, num_bits, group_size, sym):
     """Apply scale for salient weight."""
     best_scales = {}
     new_init_tensors = []
@@ -65,11 +65,11 @@ def _apply_awq_scale(model, weight_config, absorb_pairs, output_dicts, num_bits,
         weight = []
         org_out = []
         for node in nodes:
-            if (node.name, node.op_type) in weight_config and \
-                weight_config.get((node.name, node.op_type), "fp32") != "fp32":
+            if node.name in weight_config and weight_config.get(node.name, "fp32") != "fp32":
                 num_bits = weight_config[(node.name, node.op_type)].get("weight_bits", 4)
                 group_size = weight_config[(node.name, node.op_type)].get("weight_group_size", 32)
-                scheme = "sym" if weight_config[(node.name, node.op_type)].get("weight_sym", True) else "asym"
+                sym = weight_config[(node.name, node.op_type)].get("weight_sym", True)
+                accuracy_level = weight_config[(node.name, node.op_type)].get("accuracy_level", 0)
                 break
 
         # search scale
@@ -97,7 +97,7 @@ def _apply_awq_scale(model, weight_config, absorb_pairs, output_dicts, num_bits,
                 scales = np.clip(np.power(inp_scale, ratio) / np.power(w_scale, (1 - ratio)), 1e-4, None)
                 scales = scales / np.sqrt(np.max(scales) * np.min(scales))
                 weight = weight.T * scales
-                weight = quant_utils.pad_tensor(weight, group_size, (org_w_shape[0] + group_size - 1) // group_size).T
+                weight = quant_utils.pad_tensor(weight.T, group_size, (org_w_shape[0] + group_size - 1) // group_size)
 
                 if (version.Version(ort.__version__) > constants.ONNXRT1161_VERSION and num_bits == 4) or (
                     version.Version(ort.__version__) >= constants.ONNXRT116_VERSION
@@ -106,11 +106,11 @@ def _apply_awq_scale(model, weight_config, absorb_pairs, output_dicts, num_bits,
                 ):  # pragma: no cover
                     # MatMulFpQ4 support 4 bits and 32 group_size with ort 1.16.0 and 1.16.1 versions
                     # MatMulNBits supports 4 bits and 2^n group_size with ort > 1.16.1
-                    q_weight = quant_utils.qdq_tensor(weight, num_bits, group_size, scheme, "uint") / np.expand_dims(
+                    q_weight = quant_utils.qdq_tensor(weight, num_bits, group_size, sym, "uint") / np.expand_dims(
                         scales, axis=-1
                     )
                 else:
-                    q_weight = quant_utils.qdq_tensor(weight, num_bits, group_size, scheme, "int") / np.expand_dims(
+                    q_weight = quant_utils.qdq_tensor(weight, num_bits, group_size, sym, "int") / np.expand_dims(
                         scales, axis=-1
                     )
 
@@ -125,9 +125,9 @@ def _apply_awq_scale(model, weight_config, absorb_pairs, output_dicts, num_bits,
                 best_scale = scales
 
         for node in nodes:
-            weight_config.setdefault((node.name, node.op_type), {}).update({"weight_bits": num_bits})
-            weight_config.setdefault((node.name, node.op_type), {}).update({"weight_group_size": group_size})
-            weight_config.setdefault((node.name, node.op_type), {}).update({"weight_sym": scheme=="sym"})
+            weight_config.setdefault(node.name, {}).update({"weight_bits": num_bits})
+            weight_config.setdefault(node.name, {}).update({"weight_group_size": group_size})
+            weight_config.setdefault(node.name, {}).update({"weight_sym": sym})
 
             init_share_num = model.get_initializer_share_num(node.input[1])
             weight_tensor = model.get_initializer(node.input[1])
@@ -218,7 +218,7 @@ def _apply_awq_scale(model, weight_config, absorb_pairs, output_dicts, num_bits,
     return model, output_dicts
 
 
-def _apply_awq_clip(model, weight_config, absorb_pairs, output_dicts, num_bits, group_size, scheme):
+def _apply_awq_clip(model, weight_config, absorb_pairs, output_dicts, num_bits, group_size, sym):
     """Apply clip for weight by checking mse."""
     base_dir = os.path.dirname(model.model_path) if model.model_path is not None else ""
     ratios = {}
@@ -234,10 +234,11 @@ def _apply_awq_clip(model, weight_config, absorb_pairs, output_dicts, num_bits, 
         inp = np.concatenate(output_dicts[nodes[0].input[0]], axis=0)
 
         for node in nodes:
-            if (node.name, node.op_type) in weight_config:
+            if node.name in weight_config:
                 num_bits = weight_config[(node.name, node.op_type)].get("weight_bits", 4)
                 group_size = weight_config[(node.name, node.op_type)].get("weight_group_size", 32)
-                scheme = "sym" if weight_config[(node.name, node.op_type)].get("weight_sym", True) else "asym"
+                sym = weight_config[(node.name, node.op_type)].get("weight_sym", True)
+                accuracy_level = weight_config[(node.name, node.op_type)].get("accuracy_level", 0)
 
             org_weight = onnx.numpy_helper.to_array(model.get_initializer(node.input[1]), base_dir=base_dir)
             org_w_shape = org_weight.shape  # ic, oc
@@ -262,11 +263,11 @@ def _apply_awq_clip(model, weight_config, absorb_pairs, output_dicts, num_bits, 
                     # MatMulFpQ4 support 4 bits and 32 group_size with ort 1.16.0 and 1.16.1 versions
                     # MatMulNBits supports 4 bits and 2^n group_size with ort > 1.16.1
                     weight = quant_utils.qdq_tensor(
-                        weight, num_bits, group_size, scheme, "uint", ratios.get(node.input[1], 1)
+                        weight, num_bits, group_size, sym, "uint", ratios.get(node.input[1], 1)
                     )
                 else:
                     weight = quant_utils.qdq_tensor(
-                        weight, num_bits, group_size, scheme, "int", ratios.get(node.input[1], 1)
+                        weight, num_bits, group_size, sym, "int", ratios.get(node.input[1], 1)
                     )
                 weight = np.reshape(weight, (org_w_shape[1], -1))[:, : org_w_shape[0]]
                 cur_out = np.matmul(inp, weight.T)
@@ -285,7 +286,7 @@ def awq_quantize(
     weight_config: dict = {},
     num_bits: int = 4,
     group_size: int = 32,
-    scheme: str = "asym",
+    sym: bool = False,
     enable_auto_scale: bool = True,
     enable_mse_search: bool = True,
     accuracy_level: int = 0,
@@ -310,7 +311,7 @@ def awq_quantize(
             }. Defaults to {}.
         num_bits (int, optional): number of bits used to represent weights. Defaults to 4.
         group_size (int, optional): size of weight groups. Defaults to 32.
-        scheme (str, optional): indicates whether weights are symmetric. Defaults to "asym".
+        sym (bool, optional): indicates whether weights are symmetric. Defaults to False.
         enable_auto_scale (bool, optional): whether to search for best scales based on activation
             distribution. Defaults to True.
         enable_mse_search (bool, optional): whether to search for the best clip range from range
@@ -394,7 +395,7 @@ def awq_quantize(
                     output_dicts,
                     num_bits,
                     group_size,
-                    scheme,
+                    sym,
                 )
             if enable_mse_search:
                 ratios = _apply_awq_clip(
@@ -404,7 +405,7 @@ def awq_quantize(
                     output_dicts,
                     num_bits,
                     group_size,
-                    scheme,
+                    sym,
                 )
             del output_dicts
             del dump_pairs
@@ -412,7 +413,7 @@ def awq_quantize(
 
         model.remove_tensors_from_outputs(output_names)
         model.model.graph.output.MergeFrom(org_output)
-    model = rtn.rtn_quantize(model, weight_config, num_bits, group_size, scheme, full_ratio, accuracy_level, providers)
+    model = rtn.rtn_quantize(model, weight_config, num_bits, group_size, sym, full_ratio, accuracy_level, providers)
     return model
 
 

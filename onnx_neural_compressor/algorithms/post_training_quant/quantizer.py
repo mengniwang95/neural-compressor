@@ -43,14 +43,14 @@ class Quantizer:
         add_qdq_pair_to_weight=False,
         optypes_to_exclude_output_quant=[],
         dedicated_qdq_pair=False,
-        backend="CPUExecutionProvider",
+        execution_provider="CPUExecutionProvider",
     ):
         """Initialization.
 
         Args:
             model (ModelProto or onnx_model.ONNXModel): onnx model or onnx model wrapper by neural compressor
             q_config (dict): op-wise quantization config.
-            mode (QuantizationMode): quantizaion mode
+            mode (str): quantizaion mode
             static (bool): static or not
             quantization_params (dict): scale and zero point of tensors
             op_types_to_quantize (list): optypes to quantize
@@ -59,16 +59,16 @@ class Quantizer:
             add_qdq_pair_to_weight (bool, optional): add QDQ pair to weight or not. Defaults to False.
             optypes_to_exclude_output_quant (list, optional): optypes to exclude output quantization. Defaults to [].
             dedicated_qdq_pair (bool, optional): dedicate QDQ pair or not. Defaults to False.
-            backend (str, optional): backend of onnxrt adaptor. Defaults to CPUExecutionProvider
+            execution_provider (str, optional): execution_provider of onnxrt adaptor. Defaults to CPUExecutionProvider
         """
         self.model = onnx_model.ONNXModel(model) if not isinstance(model, onnx_model.ONNXModel) else model
         model = (
             onnx.shape_inference.infer_shapes(self.model.model) if not self.model.is_large_model else self.model.model
         )
         self.config = q_config
-        self.backend = backend
+        self.execution_provider = execution_provider
         self.reduce_range = reduce_range
-        self.mode = mode  # QuantizationMode.Value
+        self.mode = mode
         self.static = static  # use static quantization for inputs.
         self.fuse_dynamic_quant = False
         self.quantization_params = quantization_params
@@ -153,12 +153,11 @@ class Quantizer:
 
     def quantize_model(self):
         """Quantize onnx model."""
-        # step 1: insert q-dq, cast-cast pairs
-
+        # step 1: insert q-dq pairs
         self.insert_qdq()
 
         # step 2: convert q-node-dq to qoperator format if needed
-        if self.mode != "qdq":
+        if self.quant_format != "qdq":
             self.convert_qdq_to_operator_oriented()
 
         self.model.remove_unused_nodes()
@@ -321,7 +320,7 @@ class Quantizer:
         )
         return quantized_bias_name, quantized_value
 
-    def quantize_weight_per_channel(self, weight_name, weight_qType, scheme, channel_axis):
+    def quantize_weight_per_channel(self, weight_name, weight_qType, sym, channel_axis):
         """Quantize weight per-channel."""
         name = (
             ("_").join([weight_name, str(weight_qType)])
@@ -341,7 +340,11 @@ class Quantizer:
             else self.tensor_proto_to_array(initializer)
         )
         rmin, rmax, zero_point, scale, quantized_weights = quant_utils.quantize_data_per_channel(
-            weights, channel_axis, quant_utils.get_qrange_for_qType(weight_qType, self.reduce_range), weight_qType, scheme
+            weights,
+            channel_axis,
+            quant_utils.get_qmin_qmax_for_qType(weight_qType, self.reduce_range, sym),
+            weight_qType,
+            sym,
         )
 
         weight = quant_utils.QuantizedInitializer(
@@ -371,29 +374,6 @@ class Quantizer:
 
         return (weight.name + "_quantized", weight.name + "_zero_point", weight.name + "_scale")
 
-    def quantize_weights_per_channel(self, node, indices, weight_qType, scheme, axis):
-        """Quantize weights per-channel."""
-        for idx, inp in enumerate(node.input):
-            if idx not in indices:
-                continue
-
-            q_name, zp_name, scale_name = self.quantize_weight_per_channel(inp, weight_qType, scheme, axis)
-            weight_name = (
-                ("_").join([inp, str(weight_qType)]) if self.model.get_initializer_share_num(inp) > 1 else inp
-            )
-            dequant_node = onnx.helper.make_node(
-                "DequantizeLinear",
-                [q_name, scale_name, zp_name],
-                [weight_name + "_dequantized"],
-                weight_name + "_DequantizeLinear",
-                axis=axis,
-            )
-            self.new_nodes.append(dequant_node)
-            node.input[idx] = weight_name
-
-            # Replace weight_name with output of DequantizeLinear
-            self.replace_input.append([node, weight_name, dequant_node.output[0]])
-
     def _update_weight(self, weight):
         """Update weight.
 
@@ -412,11 +392,11 @@ class Quantizer:
 
         # Update packed weight, zero point, and scale initializers
         packed_weight_np_data = np.asarray(
-            weight.quantized_data, dtype=onnx.mapping.TENSOR_TYPE_TO_NP_TYPE[weight.qType]
+            weight.quantized_data, dtype=onnx.helper.tensor_dtype_to_np_dtype(weight.qType)
         ).reshape(weight.initializer.dims)
         packed_weight_initializer = onnx.numpy_helper.from_array(packed_weight_np_data, packed_weight_name)
 
-        if not self.add_qdq_pair_to_weight or self.mode != "qdq":
+        if not self.add_qdq_pair_to_weight or self.quant_format != "qdq":
             self.model.initializer().append(packed_weight_initializer)
         if weight.axis is not None:
             zero_scale_shape = [weight.initializer.dims[weight.axis]]
@@ -467,7 +447,7 @@ class Quantizer:
         zero_point_values = [params[0]]
         zero_point_shape = []
         zero_point_name = param_name + "_zero_point"
-        zero_point_type = onnx.mapping.NP_TYPE_TO_TENSOR_TYPE[params[0].dtype]
+        zero_point_type = onnx.helper.np_dtype_to_tensor_dtype(params[0].dtype)
 
         scale_values = [params[1]]
         scale_shape = []
@@ -496,7 +476,10 @@ class Quantizer:
             else self.tensor_proto_to_array(initializer)
         )
         rmin, rmax, zero_point, scale, quantized_weights_data = quant_utils.quantize_data(
-            weights_data.flatten().tolist(), quant_utils.get_qrange_for_qType(qType, self.reduce_range), qType, sym
+            weights_data.flatten().tolist(),
+            quant_utils.get_qmin_qmax_for_qType(qType, self.reduce_range, sym),
+            qType,
+            sym,
         )
         weight = quant_utils.QuantizedInitializer(
             name,
@@ -559,55 +542,6 @@ class Quantizer:
         add_node = onnx.helper.make_node("Add", bias_add_input, [add_node_output], quantized_bias_name + "bias_add")
         self.new_nodes.append(add_node)
         return add_node_output
-
-class StaticQuantizer(Quantizer):
-    """Static quantizer class."""
-
-    def __init__(
-        self,
-        model,
-        q_config,
-        quant_format="qoperator",
-        quantization_params={},
-        op_types_to_quantize=[],
-        fallback_list=["fp32"],
-        reduce_range=None,
-        add_qdq_pair_to_weight=False,
-        optypes_to_exclude_output_quant=[],
-        dedicated_qdq_pair=False,
-        backend="CPUExecutionProvider",
-    ):
-        """Initialization.
-
-        Args:
-            model (ModelProto or ONNXModel): onnx model or onnx model wrapper by neural compressor
-            q_config (dict): op-wise quantization config.
-            mode (QuantizationMode): quantizaion mode
-            static (bool): static or not
-            quantization_params (dict): scale and zero point of tensors
-            op_types_to_quantize (list): optypes to quantize
-            fallback_list (list, optional): fallback data type. Defaults to ['fp32'].
-            reduce_range (bool, optional): use 7 bit or not. Defaults to None.
-            add_qdq_pair_to_weight (bool, optional): add QDQ pair to weight or not. Defaults to False.
-            optypes_to_exclude_output_quant (list, optional): optypes to exclude output quantization. Defaults to [].
-            dedicated_qdq_pair (bool, optional): dedicate QDQ pair or not. Defaults to False.
-            backend (str, optional): backend of onnxrt adaptor. Defaults to CPUExecutionProvider
-        """
-        super().__init__(
-            mode="static_quant",
-            model=model,
-            q_config=q_config,
-            static=True,
-            quantization_params=quantization_params,
-            op_types_to_quantize=op_types_to_quantize,
-            )
-        self.static = True  # use static quantization for inputs.
-        self.quant_format = "qoperator" if quant_format.value == 0 else "qdq"
-        if self.opset_version < 13 and self.quant_format == "qdq":
-            logger.warning(
-                "Per-channel support with QDQ format requires opset version >= 13,"
-                " use per-tensor granularity instead"
-            )
 
     def quantize_outputs(self, node, initializer_use_weight_qType=True, direct_int8=False):
         """Quantize node outputs."""
@@ -678,12 +612,12 @@ class StaticQuantizer(Quantizer):
                     if initializer_use_weight_qType
                     else self.config[node.name]["activation_type"]
                 )
-                scheme = (
+                sym = (
                     self.config[node.name]["weight_sym"]
                     if initializer_use_weight_qType
                     else self.config[node.name]["activation_sym"]
                 )
-                weight = self._get_quantized_weight(initializer, dtype, scheme)
+                weight = self._get_quantized_weight(initializer, dtype, sym)
                 self._update_weight(weight)
 
                 if self.add_qdq_pair_to_weight and self.quant_format == "qdq":
@@ -730,61 +664,12 @@ class StaticQuantizer(Quantizer):
                 if (
                     tensor_name in self.value_infos
                     and self.value_infos[tensor_name].type.HasField("tensor_type")
-                    and self.value_infos[tensor_name].type.tensor_type.elem_type != TensorProto.FLOAT # TODO
+                    and self.value_infos[tensor_name].type.tensor_type.elem_type != onnx.TensorProto.FLOAT
                 ):
                     return
+                self._quantize_activation(node, tensor_name, direct_int8)
 
-                if tensor_name in self.quantized_value_map:
-                    # node input is model input and it has been quantized, don't insert QDQ pair
-                    if tensor_name in self.model.input():
-                        continue
-                    scale_name = self.quantized_value_map[tensor_name].scale_name
-                    zp_name = self.quantized_value_map[tensor_name].zp_name
-                    data_found = True
-                else:
-                    data_found, scale_name, zp_name, _, _ = self._get_quantization_params(tensor_name)
-
-                if data_found is False:
-                    raise ValueError(
-                        "Quantization parameters are not specified for param {}."
-                        "In static mode quantization params for inputs and outputs "
-                        "of nodes to be quantized are required.".format(tensor_name)
-                    )
-
-                if direct_int8:
-                    # direct int8 models will be quantized only if their inputs are quantized
-                    if node.input[0] not in self.quantized_value_map:
-                        return
-
-                q_input = tensor_name
-                q_output = tensor_name + "_quantized"
-                dq_input = q_output
-                dq_output = tensor_name + "_dequantized"
-                self.replace_input.append([node, tensor_name, dq_output])
-
-                quant_node_name = tensor_name + "_QuantizeLinear"
-                dequant_node_name = tensor_name + "_DequantizeLinear"
-                qlinear_node = onnx.helper.make_node(
-                    "QuantizeLinear",
-                    [q_input, scale_name, zp_name],
-                    [q_output],
-                    quant_node_name,
-                )
-                dequant_node = onnx.helper.make_node(
-                    "DequantizeLinear",
-                    [dq_input, scale_name, zp_name],
-                    [dq_output],
-                    dequant_node_name,
-                )
-                self.new_nodes.extend([qlinear_node, dequant_node])
-
-                if tensor_name not in self.quantized_value_map:
-                    quantized_value = quant_utils.QuantizedValue(
-                        tensor_name, dq_output, scale_name, zp_name, quant_utils.QuantizedValueType.Input
-                    )
-                    self.quantized_value_map[tensor_name] = quantized_value
-                
-    def quantize_weights_per_channel(self, node, indices, weight_qType, scheme, axis):
+    def quantize_weights_per_channel(self, node, indices, weight_qType, sym, axis):
         """Quantize weights per-channel."""
         if self.opset_version < 13 and self.quant_format == "qdq":
             self.quantize_inputs(node, indices)
@@ -795,7 +680,7 @@ class StaticQuantizer(Quantizer):
                 continue
 
             if self.add_qdq_pair_to_weight and self.quant_format == "qdq":
-                q_name, zp_name, scale_name = self.quantize_weight_per_channel(inp, weight_qType, scheme, axis)
+                q_name, zp_name, scale_name = self.quantize_weight_per_channel(inp, weight_qType, sym, axis)
                 weight_name = (
                     ("_").join([inp, str(weight_qType)]) if self.model.get_initializer_share_num(inp) > 1 else inp
                 )
@@ -817,7 +702,7 @@ class StaticQuantizer(Quantizer):
                 self.replace_input.append([node, weight_name, dequant_node.output[0]])
                 self.new_nodes.extend([qlinear_node, dequant_node])
             else:
-                q_name, zp_name, scale_name = self.quantize_weight_per_channel(inp, weight_qType, scheme, axis)
+                q_name, zp_name, scale_name = self.quantize_weight_per_channel(inp, weight_qType, sym, axis)
                 weight_name = (
                     ("_").join([inp, str(weight_qType)]) if self.model.get_initializer_share_num(inp) > 1 else inp
                 )
@@ -834,6 +719,106 @@ class StaticQuantizer(Quantizer):
                 # Replace weight_name with output of DequantizeLinear
                 self.replace_input.append([node, weight_name, dequant_node.output[0]])
 
+class StaticQuantizer(Quantizer):
+    """Static quantizer class."""
+
+    def __init__(
+        self,
+        model,
+        q_config,
+        quant_format="qoperator",
+        quantization_params={},
+        op_types_to_quantize=[],
+        fallback_list=["fp32"],
+        reduce_range=None,
+        add_qdq_pair_to_weight=False,
+        optypes_to_exclude_output_quant=[],
+        dedicated_qdq_pair=False,
+        execution_provider="CPUExecutionProvider",
+    ):
+        """Initialization.
+
+        Args:
+            model (ModelProto or ONNXModel): onnx model or onnx model wrapper by neural compressor
+            q_config (dict): op-wise quantization config.
+            static (bool): static or not
+            quantization_params (dict): scale and zero point of tensors
+            op_types_to_quantize (list): optypes to quantize
+            fallback_list (list, optional): fallback data type. Defaults to ['fp32'].
+            reduce_range (bool, optional): use 7 bit or not. Defaults to None.
+            add_qdq_pair_to_weight (bool, optional): add QDQ pair to weight or not. Defaults to False.
+            optypes_to_exclude_output_quant (list, optional): optypes to exclude output quantization. Defaults to [].
+            dedicated_qdq_pair (bool, optional): dedicate QDQ pair or not. Defaults to False.
+            execution_provider (str, optional): execution_provider of onnxrt adaptor. Defaults to CPUExecutionProvider
+        """
+        super().__init__(
+            mode="static_quant",
+            model=model,
+            q_config=q_config,
+            static=True,
+            quantization_params=quantization_params,
+            op_types_to_quantize=op_types_to_quantize,
+            )
+        self.static = True  # use static quantization for inputs.
+        self.quant_format = "qoperator" if quant_format.value == 0 else "qdq"
+        if self.opset_version < 13 and self.quant_format == "qdq":
+            logger.warning(
+                "Per-channel support with QDQ format requires opset version >= 13,"
+                " use per-tensor granularity instead"
+            )
+
+    def _quantize_activation(self, node, tensor_name, direct_int8=False):
+        """Quantize node activation."""
+        if tensor_name in self.quantized_value_map:
+            # node input is model input and it has been quantized, don't insert QDQ pair
+            if tensor_name in self.model.input():
+                return
+            scale_name = self.quantized_value_map[tensor_name].scale_name
+            zp_name = self.quantized_value_map[tensor_name].zp_name
+            data_found = True
+        else:
+            data_found, scale_name, zp_name, _, _ = self._get_quantization_params(tensor_name)
+
+        if data_found is False:
+            raise ValueError(
+                "Quantization parameters are not specified for param {}."
+                "In static mode quantization params for inputs and outputs "
+                "of nodes to be quantized are required.".format(tensor_name)
+            )
+
+        if direct_int8:
+            # direct int8 models will be quantized only if their inputs are quantized
+            if node.input[0] not in self.quantized_value_map:
+                return
+
+        q_input = tensor_name
+        q_output = tensor_name + "_quantized"
+        dq_input = q_output
+        dq_output = tensor_name + "_dequantized"
+        self.replace_input.append([node, tensor_name, dq_output])
+
+        quant_node_name = tensor_name + "_QuantizeLinear"
+        dequant_node_name = tensor_name + "_DequantizeLinear"
+        qlinear_node = onnx.helper.make_node(
+            "QuantizeLinear",
+            [q_input, scale_name, zp_name],
+            [q_output],
+            quant_node_name,
+        )
+        dequant_node = onnx.helper.make_node(
+            "DequantizeLinear",
+            [dq_input, scale_name, zp_name],
+            [dq_output],
+            dequant_node_name,
+        )
+        self.new_nodes.extend([qlinear_node, dequant_node])
+
+        if tensor_name not in self.quantized_value_map:
+            quantized_value = quant_utils.QuantizedValue(
+                tensor_name, dq_output, scale_name, zp_name, quant_utils.QuantizedValueType.Input
+            )
+            self.quantized_value_map[tensor_name] = quantized_value
+
 class DynamicQuantizer(Quantizer):
     """Dynamic quantizer class."""
 
@@ -846,7 +831,7 @@ class DynamicQuantizer(Quantizer):
         fallback_list=["fp32"],
         reduce_range=None,
         optypes_to_exclude_output_quant=[],
-        backend="CPUExecutionProvider",
+        execution_provider="CPUExecutionProvider",
     ):
         """Initialization.
 
@@ -860,7 +845,7 @@ class DynamicQuantizer(Quantizer):
             add_qdq_pair_to_weight (bool, optional): add QDQ pair to weight or not. Defaults to False.
             optypes_to_exclude_output_quant (list, optional): optypes to exclude output quantization. Defaults to [].
             dedicated_qdq_pair (bool, optional): dedicate QDQ pair or not. Defaults to False.
-            backend (str, optional): backend of onnxrt adaptor. Defaults to CPUExecutionProvider
+            execution_provider (str, optional): execution_provider of onnxrt adaptor. Defaults to CPUExecutionProvider
         """
         super().__init__(
             mode="dynamic_quant",
@@ -871,112 +856,50 @@ class DynamicQuantizer(Quantizer):
             op_types_to_quantize=op_types_to_quantize,
             )
 
-    def quantize_inputs(self, node, indices=None, initializer_use_weight_qType=True, direct_int8=False):
-        """Quantize node inputs."""
-        # Quantize the input
-        for idx, tensor_name in enumerate(node.input):
-            if indices and idx not in indices:
-                continue
-            initializer = utility.find_by_name(tensor_name, self.model.initializer())
-            if initializer is not None:
-                if initializer.data_type != onnx.TensorProto.FLOAT:
-                    return
-                if node.op_type not in self.op_types_to_quantize:
-                    dtype = (
-                        onnx.TensorProto.INT8 if initializer_use_weight_qType else onnx.TensorProto.UINT8
-                    )
-                    sym = True if initializer_use_weight_qType else False
-                else:
-                    dtype = (
-                        self.config[node.name]["weight_type"]
-                        if initializer_use_weight_qType
-                        else self.config[node.name]["activation_type"]
-                    )
-                    scheme = (
-                        self.config[node.name]["weight_sym"]
-                        if initializer_use_weight_qType
-                        else self.config[node.name]["activation_sym"]
-                    )
-
-                weight = self._get_quantized_weight(initializer, dtype, scheme)
-                self._update_weight(weight)
-                node.input[idx] = weight.name
-                q_weight_name = weight.name + "_quantized"
-                zp_name = weight.name + "_zero_point"
-                scale_name = weight.name + "_scale"
-
-                inputs = [q_weight_name, scale_name, zp_name]
-                output_name = tensor_name + "_DequantizeLinear"
-                dequant_node = onnx.helper.make_node(
-                    "DequantizeLinear",
-                    inputs,
-                    [weight.name + "_dequantized"],
-                    weight.name + "_DequantizeLinear",
+    def _quantize_activation(self, node, tensor_name, direct_int8=False):
+        """Quantize node activation."""
+        qlinear_node = self.model.find_node_by_name(
+            tensor_name + "_QuantizeLinear", self.new_nodes, self.model.graph()
+        )
+        if qlinear_node is None:
+            if (
+                self.fuse_dynamic_quant
+                and self.config[node.name]["activation_type"] == onnx.TensorProto.UINT8
+                and not self.config[node.name]["activation_sym"]
+            ):
+                # DynamicQuantizeLinear supports uint8 input for CPU EP, supports uint8 and int8 for DML EP
+                scale_name = tensor_name + "_scale"
+                zeropoint_name = tensor_name + "_zero_point"
+                if utility.find_by_name(scale_name, self.model.initializer()):
+                    self.model.remove_initializer(find_by_name(scale_name, self.model.initializer()))
+                if utility.find_by_name(zeropoint_name, self.model.initializer()):
+                    self.model.remove_initializer(find_by_name(zeropoint_name, self.model.initializer()))
+                qlinear_node = onnx.helper.make_node(
+                    "DynamicQuantizeLinear",
+                    [tensor_name],
+                    [tensor_name + "_dynamic_quantized", scale_name, zeropoint_name],
+                    tensor_name + "_QuantizeLinear",
                 )
-                self.new_nodes.append(dequant_node)
-                self.replace_input.append([node, weight.name, dequant_node.output[0]])
-                quantized_value = quant_utils.QuantizedValue(
-                    weight.name, q_weight_name, scale_name, zp_name, quant_utils.QuantizedValueType.Initializer, None, dtype
-                )
-                if weight.name not in self.quantized_value_map:
-                    self.quantized_value_map[weight.name] = quantized_value
             else:
-                if (
-                    tensor_name in self.value_infos
-                    and self.value_infos[tensor_name].type.HasField("tensor_type")
-                    and self.value_infos[tensor_name].type.tensor_type.elem_type != onnx.TensorProto.FLOAT
-                ):
-                    return
-
-                if tensor_name in self.quantized_value_map:
-                    scale_name = self.quantized_value_map[tensor_name].scale_name
-                    zp_name = self.quantized_value_map[tensor_name].zp_name
-                    data_found = True
-                else:
-                    data_found, scale_name, zp_name, _, _ = self._get_quantization_params(tensor_name)
-
-                qlinear_node = self.model.find_node_by_name(
-                    tensor_name + "_QuantizeLinear", self.new_nodes, self.model.graph()
+                scale_name, zp_name, _, _ = self._get_dynamic_input_quantization_params(
+                    tensor_name, self.config[node.name]["activation_type"]
                 )
-                if qlinear_node is None:
-                    if (
-                        self.fuse_dynamic_quant
-                        and self.config[node.name]["activation_type"] == onnx.TensorProto.UINT8
-                        and not self.config[node.name]["activation_sym"]
-                    ):
-                        # DynamicQuantizeLinear supports uint8 input for CPU EP, supports uint8 and int8 for DML EP
-                        scale_name = tensor_name + "_scale"
-                        zeropoint_name = tensor_name + "_zero_point"
-                        if utility.find_by_name(scale_name, self.model.initializer()):
-                            self.model.remove_initializer(find_by_name(scale_name, self.model.initializer()))
-                        if utility.find_by_name(zeropoint_name, self.model.initializer()):
-                            self.model.remove_initializer(find_by_name(zeropoint_name, self.model.initializer()))
-                        qlinear_node = onnx.helper.make_node(
-                            "DynamicQuantizeLinear",
-                            [tensor_name],
-                            [tensor_name + "_dynamic_quantized", scale_name, zeropoint_name],
-                            tensor_name + "_QuantizeLinear",
-                        )
-                    else:
-                        scale_name, zp_name, _, _ = self._get_dynamic_input_quantization_params(
-                            tensor_name, self.config[node.name]["activation_type"]
-                        )
-                        qlinear_node = onnx.helper.make_node(
-                            "QuantizeLinear",
-                            [tensor_name, scale_name, zp_name],
-                            [tensor_name + "_quantized"],
-                            tensor_name + "_QuantizeLinear",
-                        )
-                    if qlinear_node not in self.new_nodes:
-                        self.new_nodes.append(qlinear_node)
-                    self.quantized_value_map[tensor_name] = quant_utils.QuantizedValue(
-                        tensor_name,
-                        qlinear_node.output[0],
-                        scale_name,
-                        zp_name,
-                        self.config[node.name]["activation_type"],
-                    )
-                self.replace_input.append([node, tensor_name, qlinear_node.output[0]])
+                qlinear_node = onnx.helper.make_node(
+                    "QuantizeLinear",
+                    [tensor_name, scale_name, zp_name],
+                    [tensor_name + "_quantized"],
+                    tensor_name + "_QuantizeLinear",
+                )
+            if qlinear_node not in self.new_nodes:
+                self.new_nodes.append(qlinear_node)
+            self.quantized_value_map[tensor_name] = quant_utils.QuantizedValue(
+                tensor_name,
+                qlinear_node.output[0],
+                scale_name,
+                zp_name,
+                self.config[node.name]["activation_type"],
+            )
+        self.replace_input.append([node, tensor_name, qlinear_node.output[0]])
 
     def _get_dynamic_input_quantization_params(self, input_name, qType):
         """Create nodes for dynamic quantization of input.
@@ -1050,11 +973,12 @@ class DynamicQuantizer(Quantizer):
         )
         self.new_nodes.append(abs_max_node)
         #   and divide by (quantize_range/2.0) which will be equal to max(...)*2.0/quantize_range
+        qmin, qmax = quant_utils.get_qmin_qmax_for_qType(qType, self.reduce_range)
         initializer_div = onnx.helper.make_tensor(
             self.fixed_qrange_int8_name,
             onnx.TensorProto.FLOAT,
             [],
-            [_get_qrange_for_qType(qType) / 2.0],
+            [(qmax - qmin) / 2.0],
         )
         self.model.add_initializer(initializer_div)
         scale_div_name = input_name + "scale_Div"
@@ -1104,11 +1028,12 @@ class DynamicQuantizer(Quantizer):
         self.new_nodes.append(reduce_max_node)
 
         # Add tensors for quantize range and zero value.
+        qmin, qmax = quant_utils.get_qmin_qmax_for_qType(qType, self.reduce_range)
         initializer_qrange = onnx.helper.make_tensor(
             self.fixed_qrange_uint8_name,
             onnx.TensorProto.FLOAT,
             [],
-            [_get_qrange_for_qType(qType)],
+            [qmax - qmin],
         )
         self.model.add_initializer(initializer_qrange)
         initializer_qvalue = onnx.helper.make_tensor(self.fixed_zero_name, onnx.TensorProto.FLOAT, [], [0.0])

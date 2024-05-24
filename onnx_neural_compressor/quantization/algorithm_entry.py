@@ -151,6 +151,7 @@ def awq_quantize_entry(
     model = awq.apply_awq_on_model(model, configs_mapping, calibration_data_reader)
     return model
 
+import onnxruntime as ort
 ###################### Static quant Entry ##################################
 @utility.register_algo(name=constants.STATIC_QUANT)
 def static_quantize_entry(
@@ -172,30 +173,31 @@ def static_quantize_entry(
     configs_mapping = quant_config.to_config_mapping(model_info=model_info)
     logger.debug(configs_mapping)
 
+    calibration_data_reader.rewind()
     augment = calibrate.ONNXRTAugment(
         model,
         calibration_data_reader,
-        dump_op_types=quant_config.op_types_to_quantize if \
-            len(quant_config.op_types_to_quantize) > 0 else \
-            quant_config.white_list,
+        dump_op_types=quant_config.op_types_to_quantize,
+        execution_provider=quant_config.execution_provider,
         iterations=list(range(0, quant_config.calibration_sampling_size)),
     )
     min_max = augment.dump_minmax(configs_mapping)
     quantize_params = augment.dump_calibration(configs_mapping, min_max=min_max)
-
     _quantizer = quantizer.StaticQuantizer(
         model,
         configs_mapping,
         quant_format=quant_config.quant_format,
         quantization_params=quantize_params,
-        op_types_to_quantize=quant_config.op_types_to_quantize if \
-            len(quant_config.op_types_to_quantize) > 0 else \
-            quant_config.white_list,
+        op_types_to_quantize=quant_config.op_types_to_quantize,
+        execution_provider=quant_config.execution_provider,
         optypes_to_exclude_output_quant=quant_config.extra_options.get("optypes_to_exclude_output_quant", []),
-        )
+    )
     _quantizer.quantize_model()
-    _quantizer.model.save(model_output)
-    quant_utils.dump_model_op_stats(_quantizer.model.model, configs_mapping, quant_config.white_list)
+    if model_output is not None:
+        _quantizer.model.save(model_output)
+    quant_utils.dump_model_op_stats(_quantizer.model.model, configs_mapping, quant_config.op_types_to_quantize)
+    import pdb;pdb.set_trace()
+    ort.InferenceSession(_quantizer.model.model.SerializeToString(), providers=["CPUExecutionProvider"])
     return _quantizer.model.model
 
 ###################### Dynamic quant Entry ##################################
@@ -216,12 +218,10 @@ def dynamic_quantize_entry(
     _quantizer = quantizer.DynamicQuantizer(
         model,
         configs_mapping,
-        op_types_to_quantize=quant_config.op_types_to_quantize if \
-            len(quant_config.op_types_to_quantize) > 0 else \
-            quant_config.white_list,
+        op_types_to_quantize=quant_config.op_types_to_quantize,
         )
     _quantizer.quantize_model()
     if model_output is not None:
         _quantizer.model.save(model_output)
-    quant_utils.dump_model_op_stats(_quantizer.model.model, configs_mapping, quant_config.white_list)
+    quant_utils.dump_model_op_stats(_quantizer.model.model, configs_mapping, quant_config.op_types_to_quantize)
     return _quantizer.model.model

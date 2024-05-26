@@ -141,7 +141,6 @@ class StaticMatMulOperator(MatMulOperator):
     def convert(self):
         """Convert to QOperator format."""
         node = self.node
-
         parents = self.quantizer.model.get_parents(node)
         if len(self.quantizer.model.get_children(node)) == 0 or not node.name.endswith(
             "_quant"
@@ -156,15 +155,31 @@ class StaticMatMulOperator(MatMulOperator):
                 "MatMulIntegerToFloat", qlinear_matmul_inputs, node.output, node.name, domain="com.microsoft"
             )
         else:
-            child = self.quantizer.model.get_children(node)[0]
-            qlinear_matmul_output = child.output[0]
+            # after inserting QDQ, MatMul -> Q-DQ-MatMul-Q-DQ
             for parent in parents:
                 qlinear_matmul_inputs.extend(parent.input)
+
+            qlinear_matmul_output = None
+            for child in self.quantizer.model.get_children(node):
+                if child.op_type == "QuantizeLinear":
+                    qlinear_matmul_inputs.extend(child.input[1:])
+                    qlinear_matmul_output = child.output[0]
+                    self.quantizer.remove_nodes.append(child)
+                    break
+
+            child = self.quantizer.model.get_children(node)[0]
+            qlinear_matmul_output = child.output[0]
             qlinear_matmul_inputs.extend(child.input[1:])
             qlinear_matmul_node = onnx.helper.make_node(
                 "QLinearMatMul", qlinear_matmul_inputs, [qlinear_matmul_output], node.name
             )
             self.quantizer.remove_nodes.append(child)
         self.quantizer.new_nodes.append(qlinear_matmul_node)
-        self.quantizer.remove_nodes.extend(parents)
         self.quantizer.remove_nodes.append(node)
+
+        # make sure parent DequantizeLinear of input 0 is not used by other ops
+        if len(self.quantizer.model.get_children(parents[0])) == 1 and \
+            not self.quantizer.model.is_graph_output(parents[0].output[0]):
+            self.quantizer.remove_nodes.extend(parents)
+        else:
+            self.quantizer.remove_nodes.append(parents[1])

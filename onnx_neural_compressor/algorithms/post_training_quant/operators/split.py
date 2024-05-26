@@ -32,6 +32,16 @@ class SplitOperator(base_op.Operator):
         """Initialization."""
         super(SplitOperator, self).__init__(onnx_quantizer, onnx_node)
 
+    def quantize_check(self):
+        """Check if quantizaion can be done."""
+        node = self.node
+        data_found, _, _, _, _ = self.quantizer._get_quantization_params(node.output[0])
+        if not data_found:
+            return False
+        if not all([self.quantizer.is_valid_quantize_weight(i) for i in node.input]):
+            return False
+        return True
+
     def quantize(self):
         """Do quantizaion."""
         node = self.node

@@ -179,7 +179,7 @@ class Quantizer:
 
         for node, old_input_name, new_input_name in self.replace_input:
             self.model.replace_node_input(node, old_input_name, new_input_name)
-        self.model.update()
+        self.model.remove_duplicate_nodes()
 
     def convert_qdq_to_operator_oriented(self):
         """Convert QDQ to QOperator format."""
@@ -591,7 +591,8 @@ class Quantizer:
                 dequant_node_name,
             )
             self.new_nodes.extend([qlinear_node, dequant_node])
-            
+            for child in self.model.get_children(node):
+                self.replace_input.append([child, tensor_name, dequant_node.output[0]])
             if tensor_name not in self.quantized_value_map:
                 quantized_value = quant_utils.QuantizedValue(tensor_name, dq_output, scale_name, zp_name, quant_utils.QuantizedValueType.Input)
                 self.quantized_value_map[tensor_name] = quantized_value

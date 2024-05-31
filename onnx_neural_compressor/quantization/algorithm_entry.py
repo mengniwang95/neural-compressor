@@ -196,8 +196,6 @@ def static_quantize_entry(
     if model_output is not None:
         _quantizer.model.save(model_output)
     quant_utils.dump_model_op_stats(_quantizer.model.model, configs_mapping, quant_config.op_types_to_quantize)
-    import pdb;pdb.set_trace()
-    ort.InferenceSession(_quantizer.model.model.SerializeToString(), providers=["CPUExecutionProvider"])
     return _quantizer.model.model
 
 ###################### Dynamic quant Entry ##################################

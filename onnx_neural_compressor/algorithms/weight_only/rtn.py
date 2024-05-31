@@ -94,7 +94,7 @@ def rtn_quantize(
         if (
             node.op_type in ["MatMul"]  # check op_type of node is MatMul
             and model.get_initializer(node.input[1]) is not None
-            and weight_config.get((node.name, node.op_type), {}).get("weight_dtype", "fp32") != "fp32"
+            and weight_config.get(node.name, {}).get("weight_dtype", "fp32") != "fp32"
         ):
             weight_tensor = model.get_initializer(node.input[1])
             weight = onnx.numpy_helper.to_array(weight_tensor, base_dir=base_dir).copy()
@@ -102,11 +102,11 @@ def rtn_quantize(
                 continue
 
             dtype = weight.dtype
-            if (node.name, node.op_type) in weight_config:
-                num_bits = weight_config[(node.name, node.op_type)].get("weight_bits", 4)
-                group_size = weight_config[(node.name, node.op_type)].get("weight_group_size", 32)
-                sym = weight_config[(node.name, node.op_type)].get("weight_sym", True)
-                accuracy_level = weight_config[(node.name, node.op_type)].get("accuracy_level", 0)
+            if node.name in weight_config:
+                num_bits = weight_config[node.name].get("weight_bits", 4)
+                group_size = weight_config[node.name].get("weight_group_size", 32)
+                sym = weight_config[node.name].get("weight_sym", True)
+                accuracy_level = weight_config[node.name].get("accuracy_level", 0)
 
             org_w_shape = weight.shape  # ic, oc
             group_size = group_size if group_size != -1 else org_w_shape[0]

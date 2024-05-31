@@ -69,6 +69,7 @@ class Quantizer:
         self.execution_provider = execution_provider
         self.reduce_range = reduce_range
         self.mode = mode
+        self.quant_format = None
         self.static = static  # use static quantization for inputs.
         self.fuse_dynamic_quant = False
         self.quantization_params = quantization_params
@@ -158,6 +159,7 @@ class Quantizer:
 
         # step 2: convert q-node-dq to qoperator format if needed
         if self.quant_format != "qdq":
+            self.remove_duplicate_qdq_paris()
             self.convert_qdq_to_operator_oriented()
 
         self.model.remove_unused_nodes()
@@ -166,6 +168,30 @@ class Quantizer:
         self.model.model.producer_version = quant_utils.__version__
 
         return self.model.model
+
+    def remove_duplicate_qdq_paris(self):
+        """Remove duplicated qdq pairs."""
+        self.remove_nodes = []
+        for node in self.model.nodes():
+            if node.op_type == "DequantizeLinear":
+                matched_parents = self.model.match_parent_path(
+                        node,
+                        ["QuantizeLinear", "DequantizeLinear", "QuantizeLinear"],
+                        [None, None, None],
+                    )
+
+                if matched_parents is not None:
+                    # (node) DQ - (matched_parents) Q-DQ-Q
+                    if all([i.op_type == "QuantizeLinear" for i in self.model.get_children(matched_parents[1])]) and \
+                        not self.model.is_graph_output(matched_parents[1].output[0]):
+                        self.remove_nodes.append(matched_parents[1])
+                    if all([i.op_type == "DequantizeLinear" for i in self.model.get_children(matched_parents[0])]):
+                        self.remove_nodes.append(matched_parents[0])
+                        self.replace_input.append([node, node.input[0], matched_parents[2].output[0]])
+
+        self.model.remove_nodes(self.remove_nodes)
+        for node, old_input_name, new_input_name in self.replace_input:
+            self.model.replace_node_input(node, old_input_name, new_input_name)
 
     def insert_qdq(self):
         """Insert Q/DQ pairs."""
@@ -179,7 +205,7 @@ class Quantizer:
 
         for node, old_input_name, new_input_name in self.replace_input:
             self.model.replace_node_input(node, old_input_name, new_input_name)
-        self.model.remove_duplicate_nodes()
+        self.model.update()
 
     def convert_qdq_to_operator_oriented(self):
         """Convert QDQ to QOperator format."""
@@ -545,7 +571,7 @@ class Quantizer:
 
     def quantize_outputs(self, node, initializer_use_weight_qType=True, direct_int8=False):
         """Quantize node outputs."""
-        if self.quant_format == "qdq":
+        if self.quant_format != "qoperator":
             return
         for idx, tensor_name in enumerate(node.output):
             if (
@@ -571,13 +597,13 @@ class Quantizer:
                     "of nodes to be quantized are required.".format(tensor_name)
                 )
 
-            q_input = tensor_name
+            node.output[idx] = tensor_name + "_QuantizeInput"
+            q_input = node.output[idx]
             q_output = tensor_name + "_quantized"
             dq_input = q_output
-            dq_output = tensor_name + "_dequantized"
-
-            quant_node_name = tensor_name + "_QuantizeLinear"
-            dequant_node_name = tensor_name + "_DequantizeLinear"
+            dq_output = tensor_name
+            quant_node_name = tensor_name + "_" + node.name + "_QuantizeLinear"
+            dequant_node_name = tensor_name + "_" + node.name + "_DequantizeLinear"
             qlinear_node = onnx.helper.make_node(
                 "QuantizeLinear",
                 [q_input, scale_name, zp_name],
@@ -620,41 +646,27 @@ class Quantizer:
                 )
                 weight = self._get_quantized_weight(initializer, dtype, sym)
                 self._update_weight(weight)
+                node.input[idx] = weight.name
+                q_weight_name = weight.name + "_quantized"
+                zp_name = weight.name + "_zero_point"
+                scale_name = weight.name + "_scale"
 
                 if self.add_qdq_pair_to_weight and self.quant_format == "qdq":
-                    node.input[idx] = weight.name
-                    q_weight_name = weight.name + "_quantized"
-                    zp_name = weight.name + "_zero_point"
-                    scale_name = weight.name + "_scale"
                     qlinear_node = onnx.helper.make_node(
                         "QuantizeLinear",
                         [tensor_name, scale_name, zp_name],
                         [weight.name + "_quantized"],
                         weight.name + "_QuantizeLinear",
                     )
-                    dequant_node = onnx.helper.make_node(
-                        "DequantizeLinear",
-                        [weight.name + "_quantized", scale_name, zp_name],
-                        [weight.name + "_dequantized"],
-                        weight.name + "_DequantizeLinear",
-                    )
-                    self.new_nodes.extend([qlinear_node, dequant_node])
-                else:
-                    node.input[idx] = weight.name
-                    q_weight_name = weight.name + "_quantized"
-                    zp_name = weight.name + "_zero_point"
-                    scale_name = weight.name + "_scale"
+                    self.new_nodes.append(qlinear_node)
 
-                    inputs = [q_weight_name, scale_name, zp_name]
-                    output_name = tensor_name + "_DequantizeLinear"
-                    dequant_node = onnx.helper.make_node(
-                        "DequantizeLinear",
-                        inputs,
-                        [weight.name + "_dequantized"],
-                        weight.name + "_DequantizeLinear",
-                    )
-                    self.new_nodes.append(dequant_node)
-
+                dequant_node = onnx.helper.make_node(
+                    "DequantizeLinear",
+                    [q_weight_name, scale_name, zp_name],
+                    [weight.name + "_dequantized"],
+                    weight.name + "_DequantizeLinear",
+                )
+                self.new_nodes.append(dequant_node)
                 self.replace_input.append([node, weight.name, dequant_node.output[0]])
                 if weight.name not in self.quantized_value_map:
                     quantized_value = quant_utils.QuantizedValue(
@@ -680,11 +692,24 @@ class Quantizer:
             if idx not in indices:
                 continue
 
+            q_name, zp_name, scale_name = self.quantize_weight_per_channel(inp, weight_qType, sym, axis)
+            weight_name = (
+                ("_").join([inp, str(weight_qType)]) if self.model.get_initializer_share_num(inp) > 1 else inp
+            )
+            dequant_node = onnx.helper.make_node(
+                "DequantizeLinear",
+                [q_name, scale_name, zp_name],
+                [weight_name + "_dequantized"],
+                weight_name + "_DequantizeLinear",
+                axis=axis,
+            )
+            self.new_nodes.append(dequant_node)
+            node.input[idx] = weight_name
+
+            # Replace weight_name with output of DequantizeLinear
+            self.replace_input.append([node, weight_name, dequant_node.output[0]])
+
             if self.add_qdq_pair_to_weight and self.quant_format == "qdq":
-                q_name, zp_name, scale_name = self.quantize_weight_per_channel(inp, weight_qType, sym, axis)
-                weight_name = (
-                    ("_").join([inp, str(weight_qType)]) if self.model.get_initializer_share_num(inp) > 1 else inp
-                )
                 qlinear_node = onnx.helper.make_node(
                     "QuantizeLinear",
                     [inp, scale_name, zp_name],
@@ -692,33 +717,7 @@ class Quantizer:
                     weight_name + "_QuantizeLinear",
                     axis=axis,
                 )
-                dequant_node = onnx.helper.make_node(
-                    "DequantizeLinear",
-                    [q_name, scale_name, zp_name],
-                    [weight_name + "_dequantized"],
-                    weight_name + "_DequantizeLinear",
-                    axis=axis,
-                )
-                node.input[idx] = weight_name
-                self.replace_input.append([node, weight_name, dequant_node.output[0]])
-                self.new_nodes.extend([qlinear_node, dequant_node])
-            else:
-                q_name, zp_name, scale_name = self.quantize_weight_per_channel(inp, weight_qType, sym, axis)
-                weight_name = (
-                    ("_").join([inp, str(weight_qType)]) if self.model.get_initializer_share_num(inp) > 1 else inp
-                )
-                dequant_node = onnx.helper.make_node(
-                    "DequantizeLinear",
-                    [q_name, scale_name, zp_name],
-                    [weight_name + "_dequantized"],
-                    weight_name + "_DequantizeLinear",
-                    axis=axis,
-                )
-                self.new_nodes.append(dequant_node)
-                node.input[idx] = weight_name
-
-                # Replace weight_name with output of DequantizeLinear
-                self.replace_input.append([node, weight_name, dequant_node.output[0]])
+                self.new_nodes.append(qlinear_node)
 
 class StaticQuantizer(Quantizer):
     """Static quantizer class."""
@@ -793,13 +792,21 @@ class StaticQuantizer(Quantizer):
                 return
 
         q_input = tensor_name
-        q_output = tensor_name + "_quantized"
+        q_output = (
+            tensor_name + "_" + node.name + "_QuantizeLinear"
+            if tensor_name not in self.model.input()
+            else tensor_name + "_quantized"
+        )
         dq_input = q_output
-        dq_output = tensor_name + "_dequantized"
+        dq_output = (
+            tensor_name + "_" + node.name + "_dequantized"
+            if tensor_name not in self.model.input()
+            else tensor_name + "_dequantized"
+        )
         self.replace_input.append([node, tensor_name, dq_output])
 
-        quant_node_name = tensor_name + "_QuantizeLinear"
-        dequant_node_name = tensor_name + "_DequantizeLinear"
+        quant_node_name = tensor_name + "_" + node.name + "_QuantizeLinear"
+        dequant_node_name = tensor_name + "_" + node.name + "_DequantizeLinear"
         qlinear_node = onnx.helper.make_node(
             "QuantizeLinear",
             [q_input, scale_name, zp_name],
@@ -870,15 +877,15 @@ class DynamicQuantizer(Quantizer):
             ):
                 # DynamicQuantizeLinear supports uint8 input for CPU EP, supports uint8 and int8 for DML EP
                 scale_name = tensor_name + "_scale"
-                zeropoint_name = tensor_name + "_zero_point"
+                zp_name = tensor_name + "_zero_point"
                 if utility.find_by_name(scale_name, self.model.initializer()):
                     self.model.remove_initializer(find_by_name(scale_name, self.model.initializer()))
-                if utility.find_by_name(zeropoint_name, self.model.initializer()):
-                    self.model.remove_initializer(find_by_name(zeropoint_name, self.model.initializer()))
+                if utility.find_by_name(zp_name, self.model.initializer()):
+                    self.model.remove_initializer(find_by_name(zp_name, self.model.initializer()))
                 qlinear_node = onnx.helper.make_node(
                     "DynamicQuantizeLinear",
                     [tensor_name],
-                    [tensor_name + "_dynamic_quantized", scale_name, zeropoint_name],
+                    [tensor_name + "_dynamic_quantized", scale_name, zp_name],
                     tensor_name + "_QuantizeLinear",
                 )
             else:

@@ -561,13 +561,20 @@ class ONNXRTAugment:
             parent = None
             sym = False
             qType = 2  # uint8
-            if tensor_name in output_name_to_nodes:
-                parent = output_name_to_nodes[tensor_name]
-            if parent and parent.name in q_config and q_config[parent.name] not in ["fp32", "fp16", "bf16"]:
-                sym = q_config[parent.name]["activation_sym"]
-                qType = q_config[parent.name]["activation_type"]
-            elif self.execution_provider in ["TensorrtExecutionProvider"]:
-                sym = True # sym
+            if tensor_name in output_name_to_nodes and \
+                output_name_to_nodes[tensor_name].name in q_config and \
+                q_config[output_name_to_nodes[tensor_name].name] not in ["fp32", "fp16", "bf16"]:
+                sym = q_config[output_name_to_nodes[tensor_name].name]["activation_sym"]
+                qType = q_config[output_name_to_nodes[tensor_name].name]["activation_type"]
+            elif tensor_name in input_name_to_nodes and \
+                any([i.name in q_config for i in input_name_to_nodes[tensor_name]]):
+                for child in input_name_to_nodes[tensor_name]:
+                    if child.name in q_config and q_config[child.name] not in ["fp32", "fp16", "bf16"]:
+                        sym = q_config[child.name]["activation_sym"]
+                        qType = q_config[child.name]["activation_type"]
+                        break
+            if self.execution_provider in ["TensorrtExecutionProvider"]:
+                # TensorrtExecutionProvider only support int8
                 qType = 3
             node_thresholds = quantization_thresholds[tensor_name]
             node_params = self.calculate_scale_zeropoint(

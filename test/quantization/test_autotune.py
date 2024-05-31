@@ -384,6 +384,49 @@ class TestONNXRT3xAutoTune(unittest.TestCase):
         )
         self.assertIsNotNone(best_model)
 
+    def test_dynamic_dml_custom_auto_tune(self):
+        partial_fake_eval = functools.partial(fake_eval, eval_result_lst=[1.0, 0.8, 0.82, 0.81, 1.0, 0.99])
+        custom_tune_config = tuning.TuningConfig(
+            config_set=config.DynamicQuantConfig(
+                per_channel=[True, False],
+                execution_provider="DmlExecutionProvider",
+            )
+        )
+        import pdb;pdb.set_trace()
+        best_model = tuning.autotune(
+            model_input=self.gptj,
+            tune_config=custom_tune_config,
+            eval_fn=partial_fake_eval,
+            calibration_data_reader=self.data_reader,
+        )
+        import pdb;pdb.set_trace()
+        # optypes = [i.op_type for i in best_model.graph.node]
+        # self.assertTrue("DynamicQuantizeLinear" in optypes)
+        # self.assertTrue("MatMulInteger" in optypes)
+        ort.InferenceSession(best_model.SerializeToString(), providers=["CPUExecutionProvider"])
+        self.assertIsNotNone(best_model)
+
+    def test_dynamic_custom_auto_tune(self):
+        partial_fake_eval = functools.partial(fake_eval, eval_result_lst=[1.0, 0.8, 0.82, 0.81, 1.0, 0.99])
+        custom_tune_config = tuning.TuningConfig(
+            config_set=config.DynamicQuantConfig(
+                per_channel=[True, False],
+                execution_provider="CPUExecutionProvider",
+            )
+        )
+        best_model = tuning.autotune(
+            model_input=self.gptj,
+            tune_config=custom_tune_config,
+            eval_fn=partial_fake_eval,
+            calibration_data_reader=self.data_reader,
+        )
+
+        optypes = [i.op_type for i in best_model.graph.node]
+        self.assertTrue("DynamicQuantizeLinear" in optypes)
+        self.assertTrue("MatMulInteger" in optypes)
+        ort.InferenceSession(best_model.SerializeToString(), providers=["CPUExecutionProvider"])
+        self.assertIsNotNone(best_model)
+
     def test_static_default_auto_tune(self):
         partial_fake_eval = functools.partial(fake_eval, eval_result_lst=[1.0, 0.8, 0.82, 0.81, 1.0, 0.99])
 
@@ -421,6 +464,7 @@ class TestONNXRT3xAutoTune(unittest.TestCase):
             eval_fn=partial_fake_eval,
             calibration_data_reader=self.data_reader,
         )
+
         optypes = [i.op_type for i in best_model.graph.node]
         self.assertTrue("QLinearMatMul" in optypes)
         self.assertTrue("QuantizeLinear" in optypes)

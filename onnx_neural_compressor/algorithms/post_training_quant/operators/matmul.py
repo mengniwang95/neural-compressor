@@ -159,14 +159,6 @@ class StaticMatMulOperator(MatMulOperator):
             for parent in parents:
                 qlinear_matmul_inputs.extend(parent.input)
 
-            qlinear_matmul_output = None
-            for child in self.quantizer.model.get_children(node):
-                if child.op_type == "QuantizeLinear":
-                    qlinear_matmul_inputs.extend(child.input[1:])
-                    qlinear_matmul_output = child.output[0]
-                    self.quantizer.remove_nodes.append(child)
-                    break
-
             child = self.quantizer.model.get_children(node)[0]
             qlinear_matmul_output = child.output[0]
             qlinear_matmul_inputs.extend(child.input[1:])

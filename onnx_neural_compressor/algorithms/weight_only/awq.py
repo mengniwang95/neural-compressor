@@ -66,10 +66,10 @@ def _apply_awq_scale(model, weight_config, absorb_pairs, output_dicts, num_bits,
         org_out = []
         for node in nodes:
             if node.name in weight_config and weight_config.get(node.name, "fp32") != "fp32":
-                num_bits = weight_config[(node.name, node.op_type)].get("weight_bits", 4)
-                group_size = weight_config[(node.name, node.op_type)].get("weight_group_size", 32)
-                sym = weight_config[(node.name, node.op_type)].get("weight_sym", True)
-                accuracy_level = weight_config[(node.name, node.op_type)].get("accuracy_level", 0)
+                num_bits = weight_config[node.name].get("weight_bits", 4)
+                group_size = weight_config[node.name].get("weight_group_size", 32)
+                sym = weight_config[node.name].get("weight_sym", True)
+                accuracy_level = weight_config[node.name].get("accuracy_level", 0)
                 break
 
         # search scale
@@ -235,10 +235,10 @@ def _apply_awq_clip(model, weight_config, absorb_pairs, output_dicts, num_bits, 
 
         for node in nodes:
             if node.name in weight_config:
-                num_bits = weight_config[(node.name, node.op_type)].get("weight_bits", 4)
-                group_size = weight_config[(node.name, node.op_type)].get("weight_group_size", 32)
-                sym = weight_config[(node.name, node.op_type)].get("weight_sym", True)
-                accuracy_level = weight_config[(node.name, node.op_type)].get("accuracy_level", 0)
+                num_bits = weight_config[node.name].get("weight_bits", 4)
+                group_size = weight_config[node.name].get("weight_group_size", 32)
+                sym = weight_config[node.name].get("weight_sym", True)
+                accuracy_level = weight_config[node.name].get("accuracy_level", 0)
 
             org_weight = onnx.numpy_helper.to_array(model.get_initializer(node.input[1]), base_dir=base_dir)
             org_w_shape = org_weight.shape  # ic, oc
@@ -344,7 +344,7 @@ def awq_quantize(
             if (
                 node.op_type in ["MatMul"]
                 and model.get_initializer(node.input[1]) is not None
-                and weight_config.get((node.name, node.op_type), {}).get("weight_dtype", "fp32") != "fp32"
+                and weight_config.get(node.name, {}).get("weight_dtype", "fp32") != "fp32"
             ):
                 output_names.append(node.input[0])
         output_names = list(set(output_names))
@@ -375,7 +375,7 @@ def awq_quantize(
                 if (
                     node.op_type in ["MatMul"]
                     and model.get_initializer(node.input[1]) is not None
-                    and weight_config.get((node.name, node.op_type), {}).get("weight_dtype", "fp32") != "fp32"
+                    and weight_config.get(node.name, {}).get("weight_dtype", "fp32") != "fp32"
                 ):
                     dump_pairs[parent.name].append(model.get_node(node.name))
 

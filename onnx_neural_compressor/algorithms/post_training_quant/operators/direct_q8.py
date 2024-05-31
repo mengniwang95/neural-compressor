@@ -61,8 +61,6 @@ class Direct8BitOperator(base_op.Operator):
     def convert(self):
         """Convert to QOperator format."""
         node = self.node
-        if node.name == "/h.0/attn/Transpose_quant":
-            import pdb;pdb.set_trace()
         parents = self.quantizer.model.get_parents(node)
         children = self.quantizer.model.get_children(node)
         if any([i.op_type == "DequantizeLinear" for i in parents]) and any(
@@ -70,11 +68,11 @@ class Direct8BitOperator(base_op.Operator):
         ):
             for parent in parents:
                 if parent.op_type == "DequantizeLinear":
-                    self.node.input[0] = parent.input[0]
                     # make sure parent DequantizeLinear of input 0 is not used by other ops
                     if len(self.quantizer.model.get_children(parent)) == 1 and \
                         not self.quantizer.model.is_graph_output(parents[0].output[0]):
                         self.quantizer.remove_nodes.append(parent)
+                    self.node.input[0] = parent.input[0]
                     break
             for child in children:
                 if child.op_type == "QuantizeLinear":

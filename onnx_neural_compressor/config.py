@@ -469,56 +469,27 @@ class BaseConfig(ABC):
                 logger.info(new_config.to_dict())
                 model_level_config_lst.append(new_config)
 
-        # expand global op config, format like StaticQuantConfig(per_channel=[True, False])
-        params_list = self.params_list
-        global_op_tuning_param_list = []
-        for param in params_list[::-1]:
-            tuning_param = self.build_tuning_param(config, param)
- 
-            # Assign the options to the `tuning.TuningParam` instance
-            param_val = getattr(config, tuning_param.name)
-            if param_val is not None:
-                if tuning_param.is_tunable(param_val):
-                    tuning_param.options = param_val
-                    global_op_tuning_param_list.append(tuning_param)
- 
-        global_op_level_config_lst = []
-        for model_config in model_level_config_lst:
-            if len(global_op_tuning_param_list) > 0:
-                tuning_param_name_lst = [tuning_param.name for tuning_param in global_op_tuning_param_list]
-                for params_values in itertools.product(*[tuning_param.options for tuning_param in global_op_tuning_param_list]):
-                    new_config = copy.deepcopy(model_config)
-                    # for name, val in zip(tuning_param_name_lst, params_values):
-                    #     setter(new_config, name, val)
-                    # params_dir = dict(model_config.to_dict(), **dict(zip(tuning_param_name_lst, params_values)))
-                    # new_config = model_config.__class__(**params_dir)
-                    for param_name, param_value in zip(tuning_param_name_lst, params_values):
-                        setattr(new_config, param_name, param_value)
-                    logger.info(new_config.to_dict())
-                    global_op_level_config_lst.append(new_config)
-            else:
-                global_op_level_config_lst.append(model_config)
- 
+        # for format like StaticQuantConfig(per_channel=[True, False]), per_channel=[True, False] is set to each op during initialization
         # expand local op config by set_local
+        params_list = self.params_list
         tunable_params = {}
-        not_tunable_op_cfg_dict = {}
         tunable_op_cfg_dict = {}
         op_type_config_dict, op_name_config_dict = self._get_op_name_op_type_config()
 
         # find tunable params
+        is_tunable = lambda configuration: isinstance(configuration, list) and len(configuration) > 1
         for config_dict in [op_type_config_dict, op_name_config_dict]:
             for name, cfg in config_dict.items():
-                for k in params_list:
-                    if k in cfg and isinstance(cfg[k], list) and len(cfg[k]) > 1:
-                        tunable_cfg = {k: cfg[k]}
-                tunable_cfg = {k: cfg[k] for k in params_list if k in cfg and isinstance(cfg[k], list) and len(cfg[k]) > 1}
-                # add tuning values of all tunable params, keep the order of tuning value
+                # find tunable params of op config from local_config
+                tunable_cfg = {k: cfg[k] for k in params_list if k in cfg and is_tunable(cfg[k])}
+
+                # merge the tunable value of current op config and previous configs to find all candidate values
                 tunable_params.update(
-                    {key: list(set(tunable_params.get(key, [])) | set(tunable_cfg[key])) for key in set(tunable_params) | set(tunable_cfg) if isinstance(tunable_cfg.get(key, []), list) and len(tunable_cfg.get(key, [])) > 1}
+                    {key: list(set(tunable_params.get(key, [])) | set(tunable_cfg[key])) for key in set(tunable_params) | set(tunable_cfg) if is_tunable(tunable_cfg.get(key, []))}
                 )
-                if len(tunable_cfg) == 0:
-                    not_tunable_op_cfg_dict.update({name: cfg})
-                else:
+
+                # reset the tunable param value of configs later
+                if len(tunable_cfg) != 0:
                     tunable_op_cfg_dict.update({name: cfg})
 
         # follow the reverse order of params_list
@@ -526,13 +497,10 @@ class BaseConfig(ABC):
 
         # set tunable op config
         local_op_level_config_lst = []
-        for model_config in global_op_level_config_lst:
-            for name, cfg in not_tunable_op_cfg_dict.items():
-                model_config.set_local(name, cfg) # in-place operation
         if len(tunable_params) > 0:
             combination_lst = list(itertools.product(*tunable_params.values()))
             for i in range(len(combination_lst)):
-                local_op_level_config_lst.extend(copy.deepcopy(global_op_level_config_lst))
+                local_op_level_config_lst.extend(copy.deepcopy(model_level_config_lst))
 
             for model_config, tuning_idx in zip(local_op_level_config_lst, combination_lst):
                 tuning_param_dict = dict(zip(tunable_params.keys(), tuning_idx))
@@ -545,7 +513,7 @@ class BaseConfig(ABC):
                     })
                     model_config.set_local(name, new_cfg)
         else:
-            local_op_level_config_lst = global_op_level_config_lst
+            local_op_level_config_lst = model_level_config_lst
         logger.info("Expanded the %s and got %d configs.", self.__class__.name, len(local_op_level_config_lst))
         return local_op_level_config_lst
 
@@ -830,12 +798,12 @@ class RTNConfig(BaseConfig):
             op_type_config_dict, op_name_config_dict = config._get_op_name_op_type_config()
             for op_name, op_type in model_info:
                 if self.global_config is not None:
-                    config_mapping[(op_name, op_type)] = global_config
+                    config_mapping[op_name] = global_config
                 if op_type in op_type_config_dict:
-                    config_mapping[(op_name, op_type)] = op_name_config_dict[op_type]
+                    config_mapping[op_name] = op_name_config_dict[op_type]
                 for op_name_pattern in op_name_config_dict:
                     if re.match(op_name_pattern, op_name):
-                        config_mapping[(op_name, op_type)] = op_name_config_dict[op_name_pattern]
+                        config_mapping[op_name] = op_name_config_dict[op_name_pattern]
         if not self.quant_last_matmul:
             config_mapping[model_info[-1]] = {
                 "weight": {"dtype": "fp32"},
@@ -995,12 +963,12 @@ class GPTQConfig(BaseConfig):
             op_type_config_dict, op_name_config_dict = config._get_op_name_op_type_config()
             for op_name, op_type in model_info:
                 if self.global_config is not None:
-                    config_mapping[(op_name, op_type)] = global_config
+                    config_mapping[op_name] = global_config
                 if op_type in op_type_config_dict:
-                    config_mapping[(op_name, op_type)] = op_name_config_dict[op_type]
+                    config_mapping[op_name] = op_name_config_dict[op_type]
                 for op_name_pattern in op_name_config_dict:
                     if re.match(op_name_pattern, op_name):
-                        config_mapping[(op_name, op_type)] = op_name_config_dict[op_name_pattern]
+                        config_mapping[op_name] = op_name_config_dict[op_name_pattern]
         if not self.quant_last_matmul:
             config_mapping[model_info[-1]] = {
                 "weight": {"dtype": "fp32"},
@@ -1146,12 +1114,12 @@ class AWQConfig(BaseConfig):
             op_type_config_dict, op_name_config_dict = config._get_op_name_op_type_config()
             for op_name, op_type in model_info:
                 if self.global_config is not None:
-                    config_mapping[(op_name, op_type)] = global_config
+                    config_mapping[op_name] = global_config
                 if op_type in op_type_config_dict:
-                    config_mapping[(op_name, op_type)] = op_name_config_dict[op_type]
+                    config_mapping[op_name] = op_name_config_dict[op_type]
                 for op_name_pattern in op_name_config_dict:
                     if re.match(op_name_pattern, op_name):
-                        config_mapping[(op_name, op_type)] = op_name_config_dict[op_name_pattern]
+                        config_mapping[op_name] = op_name_config_dict[op_name_pattern]
         if not self.quant_last_matmul:
             config_mapping[model_info[-1]] = {
                 "weight": {"dtype": "fp32"},
@@ -1355,6 +1323,7 @@ class ExtraOptions:
         self.SmoothQuantFolding = SmoothQuantFolding
 
 
+@register_config(algo_name=constants.STATIC_QUANT, priority=constants.PRIORITY_STATIC_QUANT)
 class StaticQuantConfig(BaseConfig, quantization.StaticQuantConfig):
 
     supported_configs: List[_OperatorConfig] = []
@@ -1473,7 +1442,9 @@ class StaticQuantConfig(BaseConfig, quantization.StaticQuantConfig):
         for op_name_or_type in self.op_types_to_quantize:
             params = self.get_params_dict()
             op_config = OperatorConfig(**params)
-            # self.set_local(op_name_or_type, op_config.to_dict())
+
+            for valid_func in utility.STATIC_CHECK_FUNC_LIST:
+                op_config = valid_func(op_config, op_name_or_type, self.execution_provider, self.quant_format)
             self.set_local(op_name_or_type, op_config)
 
     def to_config_mapping(self, config_list: list = None, model_info: list = None) -> OrderedDict:
@@ -1536,7 +1507,6 @@ class StaticQuantConfig(BaseConfig, quantization.StaticQuantConfig):
             config = supported_config[0].config
             for valid_func in supported_config[0].valid_func_list:
                 config = valid_func(config, optype, execution_provider, quant_format)
-            # cfg.set_local(optype, config.to_dict())
             cfg.set_local(optype, config)
         return cfg
 
@@ -1623,6 +1593,8 @@ class StaticQuantConfig(BaseConfig, quantization.StaticQuantConfig):
                 ]
         return result
 
+
+@register_config(algo_name=constants.DYNAMIC_QUANT, priority=constants.PRIORITY_DYNAMIC_QUANT)
 class DynamicQuantConfig(BaseConfig, quantization.DynamicQuantConfig):
     """This is a class for dynamic Quant Configuration.
 
@@ -1706,9 +1678,9 @@ class DynamicQuantConfig(BaseConfig, quantization.DynamicQuantConfig):
     def _post_init(self):
         for op_name_or_type in self.op_types_to_quantize:
             params = self.get_params_dict()
-            params.update({"weight_scheme": params.get("weight_sym", True)})
             op_config = OperatorConfig(**params)
-            # self.set_local(op_name_or_type, op_config.to_dict())
+            for valid_func in utility.DYNAMIC_CHECK_FUNC_LIST:
+                op_config = valid_func(op_config, op_name_or_type, self.execution_provider)
             self.set_local(op_name_or_type, op_config)
 
     def to_config_mapping(self, config_list: list = None, model_info: list = None) -> OrderedDict:
@@ -1767,7 +1739,6 @@ class DynamicQuantConfig(BaseConfig, quantization.DynamicQuantConfig):
             config = supported_config[0].config
             for valid_func in supported_config[0].valid_func_list:
                 config = valid_func(config, optype, execution_provider)
-            # cfg.set_local(optype, config.to_dict())
             cfg.set_local(optype, config)
         return cfg
 

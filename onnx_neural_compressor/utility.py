@@ -442,25 +442,34 @@ def static_basic_check(config, optype, execution_provider, quant_format):
     return config
 
 def static_cpu_check(config, optype, execution_provider, quant_format):
+    if execution_provider != "CPUExecutionProvider":
+        return config
+
     # default config is for CPU EP
     return config
 
 def static_cuda_check(config, optype, execution_provider, quant_format):
+    if execution_provider != "CUDAExecutionProvider":
+        return config
+
     # current configurations are same as CPU EP
-    return config
+    return static_cpu_check(config, optype, execution_provider, quant_format)
 
 def static_dml_check(config, optype, execution_provider, quant_format):
     if execution_provider != "DmlExecutionProvider":
         return config
 
     # dont't support per-channel
-    if optype in ["Conv", "MatMul"]:
+    if optype in ["Conv", "MatMul", "Mul", "Relu", "Clip", "MaxPool", "Add"]:
         setattr(config, "per_channel", False)
     return config
 
 def static_dnnl_check(config, optype, execution_provider, quant_format):
+    if execution_provider != "DnnlExecutionProvider":
+        return config
+
     # current configurations are same as CPU EP
-    return config
+    return static_cpu_check(config, optype, execution_provider, quant_format)
 
 def static_trt_check(config, optype, execution_provider, quant_format):
     if execution_provider != "TensorrtExecutionProvider":
@@ -500,24 +509,38 @@ def dynamic_basic_check(config, optype, execution_provider, quant_format=None):
     return config
 
 def dynamic_cpu_check(config, optype, execution_provider, quant_format=None):
-    # default config is for CPU EP
+    if execution_provider != "CPUExecutionProvider":
+        return config
+    # TODO: add constraints for other EP
+    if optype in ["FusedConv", "Conv", "EmbedLayerNormalization", "Gather", "Attention", "LSTM"]:
+        setattr(config, "per_channel", False)
     return config
 
 def dynamic_cuda_check(config, optype, execution_provider, quant_format=None):
+    if execution_provider != "CUDAExecutionProvider":
+        return config
     # current configurations are same as CPU EP
-    return config
+    return dynamic_cpu_check(config, optype, execution_provider, quant_format)
 
 def dynamic_dml_check(config, optype, execution_provider, quant_format=None):
-    # current configurations are same as CPU EP
-    return config
+    if execution_provider != "DmlExecutionProvider":
+        return config
+
+    # don't support dynamic quantization
+    return None
 
 def dynamic_dnnl_check(config, optype, execution_provider, quant_format=None):
+    if execution_provider != "DnnlExecutionProvider":
+        return config
     # current configurations are same as CPU EP
-    return config
+    return dynamic_cpu_check(config, optype, execution_provider, quant_format)
 
 def dynamic_trt_check(config, optype, execution_provider, quant_format=None):
-    # current configurations are same as CPU EP
-    return config
+    if execution_provider != "TensorrtExecutionProvider":
+        return config
+
+    # don't support dynamic quantization
+    return None
 
 DYNAMIC_CHECK_FUNC_LIST = [
     dynamic_basic_check,

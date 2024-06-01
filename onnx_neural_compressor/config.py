@@ -118,6 +118,9 @@ class TuningParam:
             logger.debug(f"Failed to validate the input_args: {e}")
             return False
 
+    def __str__(self) -> str:
+        return self.name
+
 
 # Config registry to store all registered configs.
 class ConfigRegistry(object):
@@ -556,6 +559,13 @@ class BaseConfig(ABC):
     @abstractmethod
     def get_config_set_for_tuning(cls):
         raise NotImplementedError
+
+    def __eq__(self, other: BaseConfig) -> bool:
+        if not isinstance(other, type(self)):
+            return False
+        return self.params_list == other.params_list and all(
+            getattr(self, str(attr)) == getattr(other, str(attr)) for attr in self.params_list
+        )
 
 
 class ComposableConfig(BaseConfig):
@@ -1159,120 +1169,6 @@ def get_default_awq_config() -> AWQConfig:
     return AWQConfig()
 
 
-######################## SmoohQuant Config ###############################
-
-
-@register_config(algo_name=constants.SMOOTH_QUANT, priority=constants.PRIORITY_SMOOTH_QUANT)
-class SmoothQuantConfig(BaseConfig, quantization.StaticQuantConfig):
-    """Smooth quant quantization config."""
-
-    supported_configs: List[_OperatorConfig] = []
-    params_list: List[str] = [
-        # smooth parameters
-        "alpha",
-        "folding",
-        "auto_alpha_args",
-        "calib_iter",
-        "scales_per_op",
-    ]
-    name: str = constants.SMOOTH_QUANT
-
-    def __init__(
-        self,
-        alpha: float = 0.5,
-        folding: bool = True,
-        op_types: List[str] = ["Gemm", "Conv", "MatMul", "FusedConv"],
-        calib_iter: int = 100,
-        scales_per_op: bool = True,
-        auto_alpha_args: dict = {"alpha_min": 0.3, "alpha_max": 0.7, "alpha_step": 0.05, "attn_method": "min"},
-        providers: List[str] = ["CPUExecutionProvider"],
-        white_list: List[Union[str, Callable]] = constants.DEFAULT_WHITE_LIST,
-        **kwargs,
-    ):
-        """Init smooth quant config.
-
-        Args:
-            alpha (float, optional): alpha value to balance the quantization difficulty of activation and weight.
-                Defaults to 0.5.
-            folding (bool, optional): whether fold those foldable Mul which are inserted for smooth quant.
-                Defaults to True.
-            op_types (list, optional): the op type to be smooth quantized.
-                Defaults to ["Gemm", "Conv", "MatMul", "FusedConv"].
-            calib_iter (int, optional): iteration num for calibration. Defaults to 100.
-            scales_per_op (bool, optional): True, each op will have an individual scale, mainlyfor accuracy.
-                False, ops with the same input will share a scale, mainly for performance. Defaults to True.
-            auto_alpha_args (dict, optional): settings for alpha tuning.
-                Defaults to {"alpha_min": 0.3, "alpha_max": 0.7, "alpha_step": 0.05, "attn_method": "min"}.
-            providers (list, optional): providers used for inference.
-                Defaults to ["CPUExecutionProvider"].
-            white_list (list, optional): op in white_list will be applied current config.
-                Defaults to constants.DEFAULT_WHITE_LIST.
-            kwargs (dict): kwargs in below link are supported except calibration_data_reader:
-                https://github.com/microsoft/onnxruntime/blob/main/onnxruntime/python/tools/quantization/quantize.py#L78
-        """
-        BaseConfig.__init__(self)
-        kwargs.update({"calibration_data_reader": None})
-        quantization.StaticQuantConfig.__init__(self, **kwargs)
-        self.alpha = alpha
-        self.folding = folding
-        self.op_types = op_types
-        self.calib_iter = calib_iter
-        self.scales_per_op = scales_per_op
-        self.auto_alpha_args = auto_alpha_args
-        self.providers = providers
-        self.white_list = white_list
-        self.weight_type = self.weight_type.value if isinstance(self.weight_type, enum.Enum) else self.weight_type
-        self.activation_type = (
-            self.activation_type.value if isinstance(self.activation_type, enum.Enum) else self.activation_type
-        )
-        self.calibrate_method = (
-            self.calibrate_method.value if isinstance(self.calibrate_method, enum.Enum) else self.calibrate_method
-        )
-        self.quant_format = self.quant_format.value if isinstance(self.quant_format, enum.Enum) else self.quant_format
-        self._post_init()
-
-    @classmethod
-    def register_supported_configs(cls) -> List[_OperatorConfig]:
-        supported_configs = []
-        smooth_quant_config = SmoothQuantConfig()
-        operators = ["Gemm", "Conv", "MatMul", "FusedConv"]
-        supported_configs.append(_OperatorConfig(config=smooth_quant_config, operators=operators))
-        cls.supported_configs = supported_configs
-
-    @staticmethod
-    def get_model_info(model) -> list:
-        white_list = ["Gemm", "Conv", "MatMul", "FusedConv"]
-        filter_result = []
-        for node in model.graph.node:
-            if node.op_type in white_list:
-                pair = (node.name, node.op_type)
-                filter_result.append(pair)
-        logger.debug(f"Get model info: {filter_result}")
-        return filter_result
-
-    @classmethod
-    def get_config_set_for_tuning(
-        cls,
-    ) -> Union[None, "SmoothQuantConfig", List["SmoothQuantConfig"]]:  # pragma: no cover
-        return SmoothQuantConfig(alpha=np.arange(0.3, 0.7, 0.05))
-
-    def convert_to_ort_config(self):
-        self.activation_type = quantization.QuantType(self.activation_type)
-        self.weight_type = quantization.QuantType(self.weight_type)
-        self.weight_type = quantization.QuantType(self.weight_type)
-        self.calibrate_method = quantization.CalibrationMethod(self.calibrate_method)
-        self.quant_format = quantization.QuantFormat(self.quant_format)
-
-
-def get_default_sq_config() -> SmoothQuantConfig:
-    """Generate the default smooth quant config.
-
-    Returns:
-        the default smooth quant config.
-    """
-    return SmoothQuantConfig()
-
-
 ######################## WOQ Tuning Config ###############################
 
 
@@ -1289,10 +1185,6 @@ def get_woq_tuning_config() -> list:
     AWQ_G32ASYM = AWQConfig(weight_sym=False)
     return [RTN_G32ASYM, GPTQ_G32ASYM, GPTQ_G32ASYM_DISABLE_LAST_MATMUL, GPTQ_G128ASYM, AWQ_G32ASYM]
 
-
-##################### NC Algo Configs End ###################################
-
-register_supported_configs()
 
 ##################### Config for ONNXRuntime-like user-facing API ############
 
@@ -1321,6 +1213,9 @@ class ExtraOptions:
         self.SmoothQuant = SmoothQuant
         self.SmoothQuantAlpha = SmoothQuantAlpha
         self.SmoothQuantFolding = SmoothQuantFolding
+        self.SmoothQuantOpTypes = SmoothQuantOpTypes
+        self.SmoothQuantCalibIter = SmoothQuantCalibIter
+        self.SmoothQuantScalesPerOp = SmoothQuantScalesPerOp
 
 
 @register_config(algo_name=constants.STATIC_QUANT, priority=constants.PRIORITY_STATIC_QUANT)
@@ -1594,6 +1489,95 @@ class StaticQuantConfig(BaseConfig, quantization.StaticQuantConfig):
         return result
 
 
+######################## SmoohQuant Config ###############################
+
+
+@register_config(algo_name=constants.SMOOTH_QUANT, priority=constants.PRIORITY_SMOOTH_QUANT)
+class SmoothQuantConfig(StaticQuantConfig):
+    """Smooth quant quantization config."""
+
+    supported_configs: List[_OperatorConfig] = []
+    params_list: List[str] = []
+    model_params_list: List[str] = [
+        # smooth parameters
+        "alpha",
+        "folding",
+        "auto_alpha_args",
+        "calib_iter",
+        "scales_per_op",
+    ]
+    name: str = constants.SMOOTH_QUANT
+
+    def __init__(
+        self,
+        alpha: float = 0.5,
+        folding: bool = True,
+        op_types: List[str] = ["Gemm", "Conv", "MatMul", "FusedConv"],
+        calib_iter: int = 100,
+        scales_per_op: bool = True,
+        auto_alpha_args: dict = {"alpha_min": 0.3, "alpha_max": 0.7, "alpha_step": 0.05, "attn_method": "min"},
+        **kwargs,
+    ):
+        """Init smooth quant config.
+
+        Args:
+            alpha (float, optional): alpha value to balance the quantization difficulty of activation and weight.
+                Defaults to 0.5.
+            folding (bool, optional): whether fold those foldable Mul which are inserted for smooth quant.
+                Defaults to True.
+            op_types (list, optional): the op type to be smooth quantized.
+                Defaults to ["Gemm", "Conv", "MatMul", "FusedConv"].
+            calib_iter (int, optional): iteration num for calibration. Defaults to 100.
+            scales_per_op (bool, optional): True, each op will have an individual scale, mainlyfor accuracy.
+                False, ops with the same input will share a scale, mainly for performance. Defaults to True.
+            auto_alpha_args (dict, optional): settings for alpha tuning.
+                Defaults to {"alpha_min": 0.3, "alpha_max": 0.7, "alpha_step": 0.05, "attn_method": "min"}.
+            kwargs (dict): kwargs in below link are supported except calibration_data_reader:
+                https://github.com/microsoft/onnxruntime/blob/main/onnxruntime/python/tools/quantization/quantize.py#L78
+        """
+        super().__init__(**kwargs)
+        self.alpha = alpha
+        self.folding = folding
+        self.op_types = op_types
+        self.calib_iter = calib_iter
+        self.scales_per_op = scales_per_op
+        self.auto_alpha_args = auto_alpha_args
+        self.providers = [self.execution_provider]
+
+    @classmethod
+    def register_supported_configs(cls) -> List[_OperatorConfig]:
+        supported_configs = []
+        smooth_quant_config = SmoothQuantConfig()
+        operators = ["Gemm", "Conv", "MatMul", "FusedConv"]
+        supported_configs.append(_OperatorConfig(config=smooth_quant_config, operators=operators))
+        cls.supported_configs = supported_configs
+
+    @staticmethod
+    def get_model_info(model) -> list:
+        white_list = ["Gemm", "Conv", "MatMul", "FusedConv"]
+        filter_result = []
+        for node in model.graph.node:
+            if node.op_type in white_list:
+                pair = (node.name, node.op_type)
+                filter_result.append(pair)
+        logger.debug(f"Get model info: {filter_result}")
+        return filter_result
+
+    @classmethod
+    def get_config_set_for_tuning(
+        cls,
+    ) -> Union[None, "SmoothQuantConfig", List["SmoothQuantConfig"]]:  # pragma: no cover
+        return SmoothQuantConfig(alpha=np.arange(0.3, 0.7, 0.05))
+
+def get_default_sq_config() -> SmoothQuantConfig:
+    """Generate the default smooth quant config.
+
+    Returns:
+        the default smooth quant config.
+    """
+    return SmoothQuantConfig()
+
+
 @register_config(algo_name=constants.DYNAMIC_QUANT, priority=constants.PRIORITY_DYNAMIC_QUANT)
 class DynamicQuantConfig(BaseConfig, quantization.DynamicQuantConfig):
     """This is a class for dynamic Quant Configuration.
@@ -1803,19 +1787,7 @@ class DynamicQuantConfig(BaseConfig, quantization.DynamicQuantConfig):
                 ]
         return result
 
-def generate_nc_sq_config(quant_config: quantization.StaticQuantConfig):
-    extra_options = quant_config.extra_options
-    _extra_options = ExtraOptions(**quant_config.extra_options)
-    self.weight_sym = _extra_options.WeightSymmetric
-    self.activation_sym = _extra_options.ActivationSymmetric
-    quant_kwargs = {
-        "alpha": _extra_options.SmoothQuantAlpha,
-        "folding": _extra_options.SmoothQuantFolding,
-        "op_types": _extra_options.SmoothQuantOpTypes,
-        "calib_iter": _extra_options.SmoothQuantCalibIter,
-        "scales_per_op": _extra_options.SmoothQuantScalesPerOp,
-    }
-    quant_config.extra_options["SmoothQuant"] = False
-    quant_config_dict = quant_config.to_dict()
-    nc_sq_config = SmoothQuantConfig(**quant_kwargs, **quant_config_dict)
-    return nc_sq_config
+
+##################### NC Algo Configs End ###################################
+
+register_supported_configs()

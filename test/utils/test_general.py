@@ -249,6 +249,13 @@ class TestConfigLoader(unittest.TestCase):
         for i, cfg in enumerate(self.loader):
             self.assertEqual(cfg, self.config_set[i])
 
+    def test_config_loader_skip_verified_config(self) -> None:
+        config_set = [FakeAlgoConfig(weight_bits=[4, 8]), FakeAlgoConfig(weight_bits=8)]
+        config_loader = ConfigLoader(config_set)
+        config_count = 0
+        for i, config in enumerate(config_loader):
+            config_count += 1
+        self.assertEqual(config_count, 2)
 
 if __name__ == "__main__":
     unittest.main()

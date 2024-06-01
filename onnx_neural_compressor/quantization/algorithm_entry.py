@@ -32,60 +32,6 @@ from onnx_neural_compressor.algorithms.weight_only import rtn
 from onnxruntime import quantization
 
 
-###################### SmoothQuant Entry ##################################
-@utility.register_algo(name=constants.SMOOTH_QUANT)
-def smooth_quant_entry(
-    model: Union[pathlib.Path, str],
-    quant_config: config.SmoothQuantConfig,
-    calibration_data_reader: data_reader.CalibrationDataReader,
-    model_output: Union[pathlib.Path, str] = None,
-    *args,
-    **kwargs
-) -> Union[pathlib.Path, str, onnx.ModelProto]:
-    """Apply smooth quant."""
-    assert calibration_data_reader is not None, "Please provide calibration_data_reader"
-    assert isinstance(
-        calibration_data_reader, data_reader.CalibrationDataReader
-    ), "Please follow onnx_neural_compressor/data_reader.py to implement calibration_data_reader"
-
-    # smooth operation
-    calibration_data_reader.rewind()
-    smoother = core.Smoother(
-        model,
-        calibration_data_reader,
-        providers=quant_config.providers,
-    )
-    smoothed_model = smoother.transform(**quant_config.to_dict())
-    with tempfile.TemporaryDirectory(prefix="ort.quant.") as tmp_dir:
-        # ORT quant API requires str input
-        onnx.save_model(
-            smoothed_model,
-            pathlib.Path(tmp_dir).joinpath("smooth.onnx").as_posix(),
-            save_as_external_data=True,
-            all_tensors_to_one_file=True,
-            location="smooth.onnx_data",
-            size_threshold=1024,
-            convert_attribute=False,
-        )
-
-        # quant operation
-        calibration_data_reader.rewind()
-
-        # exclude Mul operations which are inserted during smooth operation
-        excluded_nodes = [i.name for i in smoothed_model.graph.node if i.name.endswith("_smooth_mul")]
-        quant_config.calibration_data_reader = calibration_data_reader
-        quant_config.nodes_to_exclude.extend(excluded_nodes)
-        quant_config.convert_to_ort_config()
-        quantization.quantize(
-            pathlib.Path(tmp_dir).joinpath("smooth.onnx").as_posix(),
-            model_output or pathlib.Path(tmp_dir).joinpath("quant_model.onnx").as_posix(),
-            quant_config,
-        )
-        model = model_output or onnx.load(pathlib.Path(tmp_dir).joinpath("quant_model.onnx").as_posix())
-
-    return model
-
-
 ###################### RTN Algo Entry ##################################
 @utility.register_algo(name=constants.RTN)
 def rtn_quantize_entry(
@@ -163,13 +109,16 @@ def static_quantize_entry(
     **kwargs,
 ) -> onnx.ModelProto:
     """The main entry to apply dynamic quantization."""
+    if len(quant_config.op_types_to_quantize) == 0:
+        logger.warning("No candidate op type to do quantization, exit.")
+        exit(0)
     assert calibration_data_reader is not None, "Please provide calibration_data_reader"
     assert isinstance(
         calibration_data_reader, data_reader.CalibrationDataReader
     ), "Please follow onnx_neural_compressor/quantization/calibrate.py to implement calibration_data_reader"
 
     # map config to each op
-    model_info = quant_config.get_model_info(model=model)
+    model_info = config.StaticQuantConfig.get_model_info(model=model)
     configs_mapping = quant_config.to_config_mapping(model_info=model_info)
     logger.debug(configs_mapping)
 
@@ -198,6 +147,60 @@ def static_quantize_entry(
     quant_utils.dump_model_op_stats(_quantizer.model.model, configs_mapping, quant_config.op_types_to_quantize)
     return _quantizer.model.model
 
+
+###################### SmoothQuant Entry ##################################
+@utility.register_algo(name=constants.SMOOTH_QUANT)
+def smooth_quant_entry(
+    model: Union[pathlib.Path, str],
+    quant_config: config.SmoothQuantConfig,
+    calibration_data_reader: data_reader.CalibrationDataReader,
+    model_output: Union[pathlib.Path, str] = None,
+    *args,
+    **kwargs
+) -> Union[pathlib.Path, str, onnx.ModelProto]:
+    """Apply smooth quant."""
+    assert calibration_data_reader is not None, "Please provide calibration_data_reader"
+    assert isinstance(
+        calibration_data_reader, data_reader.CalibrationDataReader
+    ), "Please follow onnx_neural_compressor/data_reader.py to implement calibration_data_reader"
+
+    # smooth operation
+    calibration_data_reader.rewind()
+    smoother = core.Smoother(
+        model,
+        calibration_data_reader,
+        providers=quant_config.providers,
+    )
+    smoothed_model = smoother.transform(**quant_config.to_dict())
+    with tempfile.TemporaryDirectory(prefix="ort.quant.") as tmp_dir:
+        # ORT quant API requires str input
+        onnx.save_model(
+            smoothed_model,
+            pathlib.Path(tmp_dir).joinpath("smooth.onnx").as_posix(),
+            save_as_external_data=True,
+            all_tensors_to_one_file=True,
+            location="smooth.onnx_data",
+            size_threshold=1024,
+            convert_attribute=False,
+        )
+
+        # quant operation
+        calibration_data_reader.rewind()
+
+        # exclude Mul operations which are inserted during smooth operation
+        excluded_nodes = [i.name for i in smoothed_model.graph.node if i.name.endswith("_smooth_mul")]
+        quant_config.nodes_to_exclude.extend(excluded_nodes)
+
+        q_model = static_quantize_entry(
+            pathlib.Path(tmp_dir).joinpath("smooth.onnx").as_posix(),
+            quant_config,
+            calibration_data_reader,
+            model_output or pathlib.Path(tmp_dir).joinpath("quant_model.onnx").as_posix(),
+        )
+
+    return q_model
+
+
 ###################### Dynamic quant Entry ##################################
 @utility.register_algo(name=constants.DYNAMIC_QUANT)
 def dynamic_quantize_entry(
@@ -208,6 +211,9 @@ def dynamic_quantize_entry(
     **kwargs,
 ) -> onnx.ModelProto:
     """The main entry to apply dynamic quantization."""
+    if len(quant_config.op_types_to_quantize) == 0:
+        logger.warning("No candidate op type to do quantization, exit.")
+        exit(0)
     # map config to each op
     model_info = quant_config.get_model_info(model=model)
     configs_mapping = quant_config.to_config_mapping(model_info=model_info)

@@ -627,10 +627,7 @@ class ONNXRTAugment:
                         rmax = max(rmax, clip_params[0], clip_params[1])
 
         scale, zp = quant_utils.calculate_scale_zp(rmin, rmax, quantize_range, qType, sym)
-        if qType == 2:
-            zp_and_scale.append(np.array(zp).astype(np.uint8))
-        else:
-            zp_and_scale.append(np.array(zp).astype(np.int8))
-        zp_and_scale.append(np.float32(scale))
+        zp_and_scale.append(zp)
+        zp_and_scale.append(scale)
 
         return zp_and_scale

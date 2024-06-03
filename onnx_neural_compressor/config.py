@@ -407,42 +407,48 @@ class BaseConfig(ABC):
         """Expand the config.
 
         case 1
-            {"global": { "reduce_range": [True, False]}} ->
-            {"global": { "reduce_range": True}}, {"global": { "reduce_range": False}}
+            {"model_params": { "reduce_range": [True, False]}} ->
+            {"model_params": { "reduce_range": True}}, {"model_params": { "reduce_range": False}}
 
-        case 2: iterate local first
-            {"global": { "reduce_range": [True, False]}, "local": {"Conv": {"per_channel": [True, False]}}} ->
-            {"global": { "reduce_range": True},  "local": {"Conv": {"per_channel": True}}},
-            {"global": { "reduce_range": True},  "local": {"Conv": {"per_channel": False}}},
-            {"global": { "reduce_range": False},  "local": {"Conv": {"per_channel": True}}},
-            {"global": { "reduce_range": False},  "local": {"Conv": {"per_channel": False}}},
+        case 2: iterate op_params first (Add only supports per_tensor)
+            {"model_params": { "reduce_range": [True, False]}, "op_params": {"per_channel": [True, False]}} ->
+            {"model_params": { "reduce_range": True}, "op_params": {"per_channel": True}}
+            {"model_params": { "reduce_range": True}, "op_params": {"per_channel": False}}
+            {"model_params": { "reduce_range": False}, "op_params": {"per_channel": True}}
+            {"model_params": { "reduce_range": False}, "op_params": {"per_channel": False}}
+
+            {"model_params": { "reduce_range": [True, False]}, "op_params": {"Conv": {"per_channel": [True, False], , "Add": {"per_channel": [True, False]}}}} ->
+            {"model_params": { "reduce_range": True},  "op_params": {"Conv": {"per_channel": True}, "Add": {"per_channel": False}}},
+            {"model_params": { "reduce_range": True},  "op_params": {"Conv": {"per_channel": False}, "Add": {"per_channel": False}}},
+            {"model_params": { "reduce_range": False},  "op_params": {"Conv": {"per_channel": True}, "Add": {"per_channel": False}}},
+            {"model_params": { "reduce_range": False},  "op_params": {"Conv": {"per_channel": False}, "Add": {"per_channel": False}}},
 
         case 3: following the order of params_list to iterate local config,
                 the same tuning param of different local config keeps same or use the last index value in tuning list
-            {"global": {"reduce_range": [True, False]},
-             "local": {"Conv": {"per_channel": [True, False], "calibrate_method": ["minmax", "entropy", "percentile"]},
-                       "MatMul": {"calibrate_method": ["minmax", "entropy"]}}} ->
-            {"global": {"reduce_range": True},
-             "local": {"Conv": {"per_channel": True, "calibrate_method": "minmax"},
-                       "MatMul": {"calibrate_method": "minmax"}}}
-            {"global": {"reduce_range": True},
-             "local": {"Conv": {"per_channel": False, "calibrate_method": "minmax"},
-                       "MatMul": {"calibrate_method": "minmax"}}}
-            {"global": {"reduce_range": True},
-             "local": {"Conv": {"per_channel": True, "calibrate_method": "entropy"},
-                       "MatMul": {"calibrate_method": "entropy"}}}
-            {"global": {"reduce_range": True},
-             "local": {"Conv": {"per_channel": False, "calibrate_method": "entropy"},
-                       "MatMul": {"calibrate_method": "entropy"}}}
-            {"global": {"reduce_range": True},
-             "local": {"Conv": {"per_channel": True, "calibrate_method": "percentile"},
-                       "MatMul": {"calibrate_method": "entropy"}}}  # "percentile" not in tuning list, use the last index value
-            {"global": {"reduce_range": True},
-             "local": {"Conv": {"per_channel": False, "calibrate_method": "percentile"},
-                       "MatMul": {"calibrate_method": "entropy"}}}
-            {"global": {"reduce_range": False},
-             "local": {"Conv": {"per_channel": True, "calibrate_method": "minmax"},
-                       "MatMul": {"calibrate_method": "minmax"}}}
+            {"model_params": {"reduce_range": [True, False]},
+             "op_params": {"Conv": {"per_channel": [True, False], "calibrate_method": ["minmax", "entropy", "percentile"]},
+                           "MatMul": {"calibrate_method": ["minmax", "entropy"]}}} ->
+            {"model_params": {"reduce_range": True},
+             "op_params": {"Conv": {"per_channel": True, "calibrate_method": "minmax"},
+                           "MatMul": {"calibrate_method": "minmax"}}}
+            {"model_params": {"reduce_range": True},
+             "op_params": {"Conv": {"per_channel": False, "calibrate_method": "minmax"},
+                           "MatMul": {"calibrate_method": "minmax"}}}
+            {"model_params": {"reduce_range": True},
+             "op_params": {"Conv": {"per_channel": True, "calibrate_method": "entropy"},
+                           "MatMul": {"calibrate_method": "entropy"}}}
+            {"model_params": {"reduce_range": True},
+             "op_params": {"Conv": {"per_channel": False, "calibrate_method": "entropy"},
+                           "MatMul": {"calibrate_method": "entropy"}}}
+            {"model_params": {"reduce_range": True},
+             "op_params": {"Conv": {"per_channel": True, "calibrate_method": "percentile"},
+                           "MatMul": {"calibrate_method": "entropy"}}}  # "percentile" not in tuning list, use the last index value
+            {"model_params": {"reduce_range": True},
+             "op_params": {"Conv": {"per_channel": False, "calibrate_method": "percentile"},
+                           "MatMul": {"calibrate_method": "entropy"}}}
+            {"model_params": {"reduce_range": False},
+             "op_params": {"Conv": {"per_channel": True, "calibrate_method": "minmax"},
+                           "MatMul": {"calibrate_method": "minmax"}}}
                 ...
         """
         config = self
@@ -450,7 +456,6 @@ class BaseConfig(ABC):
         model_level_config_lst: List[BaseConfig] = []
         model_params_list = getattr(self, "model_params_list", [])
         tuning_param_list = []
-        not_tuning_param_pair = {}  # key is the param name, value is the user specified value
 
         for param in model_params_list:
             tuning_param = self.build_tuning_param(config, param)
@@ -459,8 +464,7 @@ class BaseConfig(ABC):
                 if tuning_param.is_tunable(param_val):
                     tuning_param.options = param_val
                     tuning_param_list.append(tuning_param)
-                else:
-                    not_tuning_param_pair[tuning_param.name] = param_val
+
         if len(tuning_param_list) == 0:
             model_level_config_lst = [config]
         else:
@@ -472,51 +476,95 @@ class BaseConfig(ABC):
                 logger.info(new_config.to_dict())
                 model_level_config_lst.append(new_config)
 
-        # for format like StaticQuantConfig(per_channel=[True, False]), per_channel=[True, False] is set to each op during initialization
-        # expand local op config by set_local
-        params_list = self.params_list
-        tunable_params = {}
-        tunable_op_cfg_dict = {}
-        op_type_config_dict, op_name_config_dict = self._get_op_name_op_type_config()
-
-        # find tunable params
-        is_tunable = lambda configuration: isinstance(configuration, list) and len(configuration) > 1
-        for config_dict in [op_type_config_dict, op_name_config_dict]:
-            for name, cfg in config_dict.items():
-                # find tunable params of op config from local_config
-                tunable_cfg = {k: cfg[k] for k in params_list if k in cfg and is_tunable(cfg[k])}
-
-                # merge the tunable value of current op config and previous configs to find all candidate values
-                tunable_params.update(
-                    {key: list(set(tunable_params.get(key, [])) | set(tunable_cfg[key])) for key in set(tunable_params) | set(tunable_cfg) if is_tunable(tunable_cfg.get(key, []))}
-                )
-
-                # reset the tunable param value of configs later
-                if len(tunable_cfg) != 0:
-                    tunable_op_cfg_dict.update({name: cfg})
-
-        # follow the reverse order of params_list
-        tunable_params = {key: range(len(tunable_params[key])) for key in params_list[::-1] if key in tunable_params}
-
-        # set tunable op config
+        # set op level params
+        op_params_list = self.params_list
+        op_tuning_param_list = []
         local_op_level_config_lst = []
-        if len(tunable_params) > 0:
-            combination_lst = list(itertools.product(*tunable_params.values()))
-            for i in range(len(combination_lst)):
-                local_op_level_config_lst.extend(copy.deepcopy(model_level_config_lst))
 
-            for model_config, tuning_idx in zip(local_op_level_config_lst, combination_lst):
-                tuning_param_dict = dict(zip(tunable_params.keys(), tuning_idx))
-                for name, cfg in tunable_op_cfg_dict.items():
-                    new_cfg = copy.deepcopy(cfg)
-                    new_cfg.update({
-                        key: (cfg[key][val] if val < len(cfg[key]) else cfg[key][-1])
-                        if isinstance(cfg[key], list) else cfg[key]
-                        for key, val in tuning_param_dict.items()
-                    })
-                    model_config.set_local(name, new_cfg)
-        else:
+        import pdb;pdb.set_trace()
+        for param in op_params_list:
+            tuning_param = self.build_tuning_param(config, param)
+            param_val = getattr(config, tuning_param.name)
+            if param_val is not None:
+                if tuning_param.is_tunable(param_val):
+                    tuning_param.options = param_val
+                    op_tuning_param_list.append(tuning_param)
+
+        import pdb;pdb.set_trace()
+        if len(op_tuning_param_list) == 0:
             local_op_level_config_lst = model_level_config_lst
+        else:
+            op_type_config_dict, op_name_config_dict = self._get_op_name_op_type_config()
+            tuning_param_name_lst = [tuning_param.name for tuning_param in op_tuning_param_list]
+            tuning_param_val_lst = list(itertools.product(*[tuning_param.options for tuning_param in op_tuning_param_list]))
+            tuning_param_pair_lst = [dict([tuning_param_name_lst[::-1], val[::-1]]) for val in tuning_param_val_lst]
+
+            for model_level_config in model_level_config_lst:
+                new_config = copy.deepcopy(model_level_config)
+                for tuning_param_pair in tuning_param_pair_lst:
+                    new_config.update(tuning_param_pair)
+                    for config_dict in [op_type_config_dict, op_name_config_dict]:
+                        update_dict = {
+                            key: tuning_param_pair[key]
+                            if isinstance(config_dict[key], list) and key in tuning_param_pair and tuning_param_pair[key] in config_dict[key] else config_dict[key]
+                            for key, val in config_dict.items()
+                        }
+        #             new_cfg = copy.deepcopy(cfg)
+        #             new_cfg.update({
+        #                 key: (cfg[key][val] if val < len(cfg[key]) else cfg[key][-1])
+        #                 if isinstance(cfg[key], list) else cfg[key]
+        #                 for key, val in tuning_param_dict.items()
+        #             })
+        #             model_config.set_local(name, new_cfg)
+
+                    logger.info(new_config.to_dict())
+                    local_op_level_config_lst.append(new_config)
+
+        # # for format like StaticQuantConfig(per_channel=[True, False]), per_channel=[True, False] is set to each op during initialization
+        # # expand local op config by set_local
+        # params_list = self.params_list
+        # tunable_params = {}
+        # tunable_op_cfg_dict = {}
+        # op_type_config_dict, op_name_config_dict = self._get_op_name_op_type_config()
+
+        # # find tunable params
+        # is_tunable = lambda configuration: isinstance(configuration, list) and len(configuration) > 1
+        # for config_dict in [op_type_config_dict, op_name_config_dict]:
+        #     for name, cfg in config_dict.items():
+        #         # find tunable params of op config from local_config
+        #         tunable_cfg = {k: cfg[k] for k in params_list if k in cfg and is_tunable(cfg[k])}
+
+        #         # merge the tunable value of current op config and previous configs to find all candidate values
+        #         tunable_params.update(
+        #             {key: list(set(tunable_params.get(key, [])) | set(tunable_cfg[key])) for key in set(tunable_params) | set(tunable_cfg) if is_tunable(tunable_cfg.get(key, []))}
+        #         )
+
+        #         # reset the tunable param value of configs later
+        #         if len(tunable_cfg) != 0:
+        #             tunable_op_cfg_dict.update({name: cfg})
+
+        # # follow the reverse order of params_list
+        # tunable_params = {key: range(len(tunable_params[key])) for key in params_list[::-1] if key in tunable_params}
+
+        # # set tunable op config
+        # local_op_level_config_lst = []
+        # if len(tunable_params) > 0:
+        #     combination_lst = list(itertools.product(*tunable_params.values()))
+        #     for i in range(len(combination_lst)):
+        #         local_op_level_config_lst.extend(copy.deepcopy(model_level_config_lst))
+
+        #     for model_config, tuning_idx in zip(local_op_level_config_lst, combination_lst):
+        #         tuning_param_dict = dict(zip(tunable_params.keys(), tuning_idx))
+        #         for name, cfg in tunable_op_cfg_dict.items():
+        #             new_cfg = copy.deepcopy(cfg)
+        #             new_cfg.update({
+        #                 key: (cfg[key][val] if val < len(cfg[key]) else cfg[key][-1])
+        #                 if isinstance(cfg[key], list) else cfg[key]
+        #                 for key, val in tuning_param_dict.items()
+        #             })
+        #             model_config.set_local(name, new_cfg)
+        # else:
+        #     local_op_level_config_lst = model_level_config_lst
         logger.info("Expanded the %s and got %d configs.", self.__class__.name, len(local_op_level_config_lst))
         return local_op_level_config_lst
 
@@ -541,14 +589,14 @@ class BaseConfig(ABC):
             op_type_config_dict, op_name_config_dict = config._get_op_name_op_type_config()
             for op_name, op_type in model_info:
                 if self.global_config is not None:
-                    config_mapping[(op_name, op_type)] = global_config
+                    config_mapping[op_name] = global_config
                 if op_type in op_type_config_dict:
-                    config_mapping[(op_name, op_type)] = op_name_config_dict[op_type]
+                    config_mapping[op_name] = op_name_config_dict[op_type]
                 for op_name_pattern in op_name_config_dict:
                     if isinstance(op_name, str) and re.match(op_name_pattern, op_name):
-                        config_mapping[(op_name, op_type)] = op_name_config_dict[op_name_pattern]
+                        config_mapping[op_name] = op_name_config_dict[op_name_pattern]
                     elif op_name_pattern == op_name:
-                        config_mapping[(op_name, op_type)] = op_name_config_dict[op_name_pattern]
+                        config_mapping[op_name] = op_name_config_dict[op_name_pattern]
         return config_mapping
 
     @staticmethod
@@ -613,10 +661,10 @@ class ComposableConfig(BaseConfig):
             single_config_model_info = model_info.get(config.name, None)
             for op_name, op_type in single_config_model_info:
                 if op_type in op_type_config_dict:
-                    config_mapping[(op_name, op_type)] = op_name_config_dict[op_type]
+                    config_mapping[op_name] = op_name_config_dict[op_type]
                 for op_name_pattern in op_name_config_dict:
                     if re.match(op_name_pattern, op_name):
-                        config_mapping[(op_name, op_type)] = op_name_config_dict[op_name_pattern]
+                        config_mapping[op_name] = op_name_config_dict[op_name_pattern]
         return config_mapping
 
     @classmethod
@@ -1257,6 +1305,7 @@ class StaticQuantConfig(BaseConfig, quantization.StaticQuantConfig):
         calibration_sampling_size=100,
         quant_last_matmul=True,
         execution_provider=None,
+        white_list: list = constants.DEFAULT_WHITE_LIST,
         **kwargs,
     ):
         """This is a class for static Quant Configuration.
@@ -1311,6 +1360,7 @@ class StaticQuantConfig(BaseConfig, quantization.StaticQuantConfig):
         _extra_options = ExtraOptions(**self.extra_options)
         self.weight_sym = _extra_options.WeightSymmetric
         self.activation_sym = _extra_options.ActivationSymmetric
+        self.white_list = white_list
         self._post_init()
 
     @staticmethod
@@ -1341,6 +1391,11 @@ class StaticQuantConfig(BaseConfig, quantization.StaticQuantConfig):
             for valid_func in utility.STATIC_CHECK_FUNC_LIST:
                 op_config = valid_func(op_config, op_name_or_type, self.execution_provider, self.quant_format)
             self.set_local(op_name_or_type, op_config)
+        if isinstance(self.white_list, list) and len(self.white_list) > 0:
+            for op_name_or_type in self.white_list:
+                global_config = self.get_init_args()
+                tmp_config = self.__class__(**global_config, white_list=None)
+                self.set_local(op_name_or_type, tmp_config)
 
     def to_config_mapping(self, config_list: list = None, model_info: list = None) -> OrderedDict:
         config_mapping = OrderedDict()
@@ -1390,19 +1445,20 @@ class StaticQuantConfig(BaseConfig, quantization.StaticQuantConfig):
             reduce_range=reduce_range,
             use_external_data_format=use_external_data_format,
             calibration_sampling_size=calibration_sampling_size,
-            op_types_to_quantize=[],
+            op_types_to_quantize=op_types_to_quantize,
             nodes_to_exclude=nodes_to_exclude,
-            quant_last_matmul=quant_last_matmul,
+            quant_last_matmul=[True, False],
+            per_channel=[True, False],
         )
-        cfg.op_types_to_quantize = op_types_to_quantize
-        for optype in cfg.op_types_to_quantize:
-            supported_config = [i for i in StaticQuantConfig.supported_configs if optype in i.operators]
-            if len(supported_config) == 0:
-                continue
-            config = supported_config[0].config
-            for valid_func in supported_config[0].valid_func_list:
-                config = valid_func(config, optype, execution_provider, quant_format)
-            cfg.set_local(optype, config)
+        # cfg.op_types_to_quantize = op_types_to_quantize
+        # for optype in cfg.op_types_to_quantize:
+        #     supported_config = [i for i in StaticQuantConfig.supported_configs if optype in i.operators]
+        #     if len(supported_config) == 0:
+        #         continue
+        #     config = supported_config[0].config
+        #     for valid_func in supported_config[0].valid_func_list:
+        #         config = valid_func(config, optype, execution_provider, quant_format)
+        #     cfg.set_local(optype, config)
         return cfg
 
     @classmethod
@@ -1497,7 +1553,14 @@ class SmoothQuantConfig(StaticQuantConfig):
     """Smooth quant quantization config."""
 
     supported_configs: List[_OperatorConfig] = []
-    params_list: List[str] = []
+    params_list: List[str] = [
+        "weight_type",
+        "activation_type",
+        "per_channel",
+        "weight_sym",
+        "activation_sym",
+        "calibrate_method",
+    ]
     model_params_list: List[str] = [
         # smooth parameters
         "alpha",
@@ -1516,6 +1579,7 @@ class SmoothQuantConfig(StaticQuantConfig):
         calib_iter: int = 100,
         scales_per_op: bool = True,
         auto_alpha_args: dict = {"alpha_min": 0.3, "alpha_max": 0.7, "alpha_step": 0.05, "attn_method": "min"},
+        white_list: list = None,
         **kwargs,
     ):
         """Init smooth quant config.
@@ -1535,14 +1599,13 @@ class SmoothQuantConfig(StaticQuantConfig):
             kwargs (dict): kwargs in below link are supported except calibration_data_reader:
                 https://github.com/microsoft/onnxruntime/blob/main/onnxruntime/python/tools/quantization/quantize.py#L78
         """
-        super().__init__(**kwargs)
+        super().__init__(white_list=white_list, **kwargs)
         self.alpha = alpha
         self.folding = folding
         self.op_types = op_types
         self.calib_iter = calib_iter
         self.scales_per_op = scales_per_op
         self.auto_alpha_args = auto_alpha_args
-        self.providers = [self.execution_provider]
 
     @classmethod
     def register_supported_configs(cls) -> List[_OperatorConfig]:
@@ -1613,6 +1676,7 @@ class DynamicQuantConfig(BaseConfig, quantization.DynamicQuantConfig):
         extra_options: dict = None,
         quant_last_matmul: bool = True,
         execution_provider: str = None,
+        white_list: list = constants.DEFAULT_WHITE_LIST,
         **kwargs,
     ):
         if execution_provider is None:
@@ -1637,6 +1701,7 @@ class DynamicQuantConfig(BaseConfig, quantization.DynamicQuantConfig):
         _extra_options = ExtraOptions(**self.extra_options)
         self.weight_sym = _extra_options.WeightSymmetric
         self.activation_sym = _extra_options.ActivationSymmetric
+        self.white_list = white_list
         self._post_init()
 
     @staticmethod
@@ -1666,6 +1731,11 @@ class DynamicQuantConfig(BaseConfig, quantization.DynamicQuantConfig):
             for valid_func in utility.DYNAMIC_CHECK_FUNC_LIST:
                 op_config = valid_func(op_config, op_name_or_type, self.execution_provider)
             self.set_local(op_name_or_type, op_config)
+        if isinstance(self.white_list, list) and len(self.white_list) > 0:
+            for op_name_or_type in self.white_list:
+                global_config = self.get_init_args()
+                tmp_config = self.__class__(**global_config, white_list=None)
+                self.set_local(op_name_or_type, tmp_config)
 
     def to_config_mapping(self, config_list: list = None, model_info: list = None) -> OrderedDict:
         config_mapping = OrderedDict()
@@ -1706,24 +1776,25 @@ class DynamicQuantConfig(BaseConfig, quantization.DynamicQuantConfig):
             execution_provider = utility.auto_detect_ep()
         if op_types_to_quantize is None:
             op_types_to_quantize = constants.DYNAMIC_OP_LIST_MAP.get(execution_provider, [])
-        DynamicQuantConfig.register_supported_configs()
+        # DynamicQuantConfig.register_supported_configs()
         cfg = DynamicQuantConfig(
             execution_provider=execution_provider,
-            op_types_to_quantize=[],
+            op_types_to_quantize=op_types_to_quantize,
             nodes_to_exclude=nodes_to_exclude,
             reduce_range=reduce_range,
             use_external_data_format=use_external_data_format,
-            quant_last_matmul=quant_last_matmul,
+            quant_last_matmul=[True, False],
+            per_channel=[True, False],
         )
-        cfg.op_types_to_quantize = op_types_to_quantize
-        for optype in cfg.op_types_to_quantize:
-            supported_config = [i for i in DynamicQuantConfig.supported_configs if optype in i.operators]
-            if len(supported_config) == 0:
-                continue
-            config = supported_config[0].config
-            for valid_func in supported_config[0].valid_func_list:
-                config = valid_func(config, optype, execution_provider)
-            cfg.set_local(optype, config)
+        # cfg.op_types_to_quantize = op_types_to_quantize
+        # for optype in cfg.op_types_to_quantize:
+        #     supported_config = [i for i in DynamicQuantConfig.supported_configs if optype in i.operators]
+        #     if len(supported_config) == 0:
+        #         continue
+        #     config = supported_config[0].config
+        #     for valid_func in supported_config[0].valid_func_list:
+        #         config = valid_func(config, optype, execution_provider)
+        #     cfg.set_local(optype, config)
         return cfg
 
     @classmethod

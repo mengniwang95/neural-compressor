@@ -427,7 +427,7 @@ def calculate_scale_zp(rmin, rmax, quantize_range, qType, sym):
         else:
             scale = (float(rmax) - float(rmin)) / (qmax - qmin) if rmin != rmax else 1
         zero_point = np.round(qmax + qmin / 2.0).astype(dtype) if sym else \
-            np.asarray((qmin - rmin) / scale).astype(dtype)
+            np.round((qmin - rmin) / scale).astype(dtype)
     return scale, zero_point
 
 def quantize_data(data, quantize_range, qType, sym):
@@ -456,7 +456,6 @@ def quantize_data(data, quantize_range, qType, sym):
     scale, zero_point = calculate_scale_zp(rmin, rmax, quantize_range, qType, sym)
     quantized_data = quantize_nparray(qType, data, scale, zero_point, low=quantize_range[0], high=quantize_range[1])
     return rmin, rmax, zero_point, scale, quantized_data
-
 
 
 def get_node_original_name(node) -> str:

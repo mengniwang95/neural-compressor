@@ -169,7 +169,7 @@ def smooth_quant_entry(
     smoother = core.Smoother(
         model,
         calibration_data_reader,
-        providers=quant_config.providers,
+        execution_provider=getattr(quant_config, "execution_provider", "CPUExecutionProvider")
     )
     smoothed_model = smoother.transform(**quant_config.to_dict())
     with tempfile.TemporaryDirectory(prefix="ort.quant.") as tmp_dir:

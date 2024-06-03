@@ -358,8 +358,8 @@ class TestQuantizationConfig(unittest.TestCase):
         logger.info(quant_config)
         configs_mapping = quant_config.to_config_mapping(model_info=model_info)
         logger.info(configs_mapping)
-        self.assertTrue(configs_mapping[("/h.4/mlp/fc_out/MatMul", "MatMul")].weight_bits == 8)
-        self.assertTrue(configs_mapping[("/h.4/mlp/fc_in/MatMul", "MatMul")].weight_bits == 4)
+        self.assertTrue(configs_mapping["/h.4/mlp/fc_out/MatMul"].weight_bits == 8)
+        self.assertTrue(configs_mapping["/h.4/mlp/fc_in/MatMul"].weight_bits == 4)
 
     def test_config_from_dict(self):
         quant_config = {
@@ -430,17 +430,17 @@ class TestQuantizationConfig(unittest.TestCase):
         logger.info(quant_config)
         configs_mapping = quant_config.to_config_mapping(model_info=model_info)
         logger.info(configs_mapping)
-        self.assertTrue(configs_mapping[("/h.4/mlp/fc_out/MatMul", "MatMul")].weight_bits == 8)
-        self.assertTrue(configs_mapping[("/h.4/mlp/fc_in/MatMul", "MatMul")].weight_bits == 4)
+        self.assertTrue(configs_mapping["/h.4/mlp/fc_out/MatMul"].weight_bits == 8)
+        self.assertTrue(configs_mapping["/h.4/mlp/fc_in/MatMul"].weight_bits == 4)
         # test regular matching
         fc_config = config.RTNConfig(weight_bits=3)
         quant_config.set_local("/h.[1-4]/mlp/fc_out/MatMul", fc_config)
         configs_mapping = quant_config.to_config_mapping(model_info=model_info)
         logger.info(configs_mapping)
-        self.assertTrue(configs_mapping[("/h.4/mlp/fc_out/MatMul", "MatMul")].weight_bits == 3)
-        self.assertTrue(configs_mapping[("/h.3/mlp/fc_out/MatMul", "MatMul")].weight_bits == 3)
-        self.assertTrue(configs_mapping[("/h.2/mlp/fc_out/MatMul", "MatMul")].weight_bits == 3)
-        self.assertTrue(configs_mapping[("/h.1/mlp/fc_out/MatMul", "MatMul")].weight_bits == 3)
+        self.assertTrue(configs_mapping["/h.4/mlp/fc_out/MatMul"].weight_bits == 3)
+        self.assertTrue(configs_mapping["/h.3/mlp/fc_out/MatMul"].weight_bits == 3)
+        self.assertTrue(configs_mapping["/h.2/mlp/fc_out/MatMul"].weight_bits == 3)
+        self.assertTrue(configs_mapping["/h.1/mlp/fc_out/MatMul"].weight_bits == 3)
 
     def test_diff_types_configs_addition(self):
         quant_config1 = {

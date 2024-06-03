@@ -108,7 +108,7 @@ class Smoother:
         self,
         model: Union[onnx.ModelProto, onnx_model.ONNXModel, pathlib.Path, str],
         dataloader: data_reader.CalibrationDataReader,
-        providers: List[str] = ["CPUExecutionProvider"],
+        execution_provider: str = "CPUExecutionProvider",
     ):
         """Initialize the attributes of class."""
         self.model = (
@@ -118,7 +118,7 @@ class Smoother:
         self.value_infos.update({ot.name: ot for ot in self.model.model.graph.output})
         self.value_infos.update({it.name: it for it in self.model.model.graph.input})
         self.dataloader = dataloader
-        self.providers = providers
+        self.providers = [execution_provider]
         self.tensor_scales_info = {}
         self.new_added_mul_nodes = []
         self.new_added_value_info = []

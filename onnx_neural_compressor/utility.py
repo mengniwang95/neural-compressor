@@ -445,7 +445,13 @@ def static_cpu_check(config, optype, execution_provider, quant_format):
     if execution_provider != "CPUExecutionProvider":
         return config
 
-    # default config is for CPU EP
+    # only support per-tensor
+    if optype in ["EmbedLayerNormalization", "Relu", "Clip", "LeakyRelu", "Sigmoid", "MaxPool", "GlobalAveragePool",
+                    "Pad", "Split", "Squeeze", "Reshape", "Concat", "AveragePool", "Tile", 
+                    "Unsqueeze", "Transpose", "Resize", "Abs", "Shrink", "Sign", "Attention",
+                    "Flatten", "Expand", "Slice", "Mod", "ReduceMax", "ReduceMin",
+                    "CenterCropPad", "Add", "Mul", "ArgMax"]:
+        setattr(config, "per_channel", False)
     return config
 
 def static_cuda_check(config, optype, execution_provider, quant_format):
@@ -459,7 +465,7 @@ def static_dml_check(config, optype, execution_provider, quant_format):
     if execution_provider != "DmlExecutionProvider":
         return config
 
-    # dont't support per-channel
+    # only support per-tensor
     if optype in ["Conv", "MatMul", "Mul", "Relu", "Clip", "MaxPool", "Add"]:
         setattr(config, "per_channel", False)
     return config

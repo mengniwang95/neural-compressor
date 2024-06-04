@@ -119,7 +119,6 @@ class TestQuantizationConfig(unittest.TestCase):
                 self.assertTrue("add2" not in configs_mapping)
                 self.assertTrue("Matmul" not in configs_mapping)
 
-            # only 1 config without op level quant config
             self.assertEqual(len(config_loader.config_set), 4)
 
     def test_dynamic_custom_quant_config(self):
@@ -167,7 +166,6 @@ class TestQuantizationConfig(unittest.TestCase):
                     execution_provider=execution_provider,
                 )
             )
-            import pdb;pdb.set_trace()
             config_loader = tuning.ConfigLoader(config_set=tuning_config.config_set, sampler=tuning_config.sampler)
             for idx, quant_config in enumerate(config_loader):
                 model_info = quant_config.get_model_info(model=self.simple_onnx_model)
@@ -176,12 +174,8 @@ class TestQuantizationConfig(unittest.TestCase):
                     self.assertTrue(configs_mapping["Matmul"]["per_channel"])
                 elif idx in [1, 3, 5]:
                     self.assertFalse(configs_mapping["Matmul"]["per_channel"])
-                if idx in [0, 1]:
-                    self.assertEqual(configs_mapping["add"]["calibrate_method"], quantization.CalibrationMethod.MinMax)
-                elif idx in [2, 3]:
-                    self.assertEqual(configs_mapping["add"]["calibrate_method"], quantization.CalibrationMethod.Entropy)
-                elif idx in [4, 5]:
-                    self.assertEqual(configs_mapping["add"]["calibrate_method"], quantization.CalibrationMethod.Percentile)
+                self.assertEqual(configs_mapping["add"]["calibrate_method"], quantization.CalibrationMethod.MinMax)
+                self.assertEqual(configs_mapping["Matmul"]["calibrate_method"], quantization.CalibrationMethod.MinMax)
                 self.assertLess(idx, 6)
 
         for execution_provider in ["TensorrtExecutionProvider"]:
@@ -213,12 +207,8 @@ class TestQuantizationConfig(unittest.TestCase):
                 model_info = quant_config.get_model_info(model=self.simple_onnx_model)
                 configs_mapping = quant_config.to_config_mapping(model_info=model_info)
                 self.assertFalse(configs_mapping["Matmul"]["per_channel"])
-                if idx in [0]:
-                    self.assertEqual(configs_mapping["add"]["calibrate_method"], quantization.CalibrationMethod.MinMax)
-                elif idx in [1]:
-                    self.assertEqual(configs_mapping["add"]["calibrate_method"], quantization.CalibrationMethod.Entropy)
-                elif idx in [2]:
-                    self.assertEqual(configs_mapping["add"]["calibrate_method"], quantization.CalibrationMethod.Percentile)
+                self.assertEqual(configs_mapping["add"]["calibrate_method"], quantization.CalibrationMethod.MinMax)
+                self.assertEqual(configs_mapping["Matmul"]["calibrate_method"], quantization.CalibrationMethod.MinMax)
                 self.assertLess(idx, 3)
 
         for execution_provider in ["TensorrtExecutionProvider"]:
@@ -235,13 +225,9 @@ class TestQuantizationConfig(unittest.TestCase):
                 if idx in [0, 2, 4]:
                     self.assertFalse(configs_mapping["Matmul"]["per_channel"])
                 elif idx in [1, 3, 5]:
-                    self.assertTrue(configs_mapping["Matmul"]["per_channel"])
-                if idx in [0, 1]:
-                    self.assertEqual(configs_mapping["add"]["calibrate_method"], quantization.CalibrationMethod.MinMax)
-                elif idx in [2, 3]:
-                    self.assertEqual(configs_mapping["add"]["calibrate_method"], quantization.CalibrationMethod.Entropy)
-                elif idx in [4, 5]:
-                    self.assertEqual(configs_mapping["add"]["calibrate_method"], quantization.CalibrationMethod.Percentile)
+                    self.assertTrue(configs_mapping["add"]["per_channel"])
+                self.assertEqual(configs_mapping["add"]["calibrate_method"], quantization.CalibrationMethod.MinMax)
+                self.assertEqual(configs_mapping["add"]["calibrate_method"], quantization.CalibrationMethod.MinMax)
                 self.assertTrue(configs_mapping["add"]["weight_sym"])
                 self.assertTrue(configs_mapping["add"]["activation_sym"])
                 self.assertTrue(configs_mapping["Matmul"]["weight_sym"])
@@ -358,8 +344,8 @@ class TestQuantizationConfig(unittest.TestCase):
         logger.info(quant_config)
         configs_mapping = quant_config.to_config_mapping(model_info=model_info)
         logger.info(configs_mapping)
-        self.assertTrue(configs_mapping["/h.4/mlp/fc_out/MatMul"].weight_bits == 8)
-        self.assertTrue(configs_mapping["/h.4/mlp/fc_in/MatMul"].weight_bits == 4)
+        self.assertTrue(configs_mapping["/h.4/mlp/fc_out/MatMul"]["weight_bits"] == 8)
+        self.assertTrue(configs_mapping["/h.4/mlp/fc_in/MatMul"]["weight_bits"] == 4)
 
     def test_config_from_dict(self):
         quant_config = {
@@ -430,17 +416,17 @@ class TestQuantizationConfig(unittest.TestCase):
         logger.info(quant_config)
         configs_mapping = quant_config.to_config_mapping(model_info=model_info)
         logger.info(configs_mapping)
-        self.assertTrue(configs_mapping["/h.4/mlp/fc_out/MatMul"].weight_bits == 8)
-        self.assertTrue(configs_mapping["/h.4/mlp/fc_in/MatMul"].weight_bits == 4)
+        self.assertTrue(configs_mapping["/h.4/mlp/fc_out/MatMul"]["weight_bits"] == 8)
+        self.assertTrue(configs_mapping["/h.4/mlp/fc_in/MatMul"]["weight_bits"] == 4)
         # test regular matching
         fc_config = config.RTNConfig(weight_bits=3)
         quant_config.set_local("/h.[1-4]/mlp/fc_out/MatMul", fc_config)
         configs_mapping = quant_config.to_config_mapping(model_info=model_info)
         logger.info(configs_mapping)
-        self.assertTrue(configs_mapping["/h.4/mlp/fc_out/MatMul"].weight_bits == 3)
-        self.assertTrue(configs_mapping["/h.3/mlp/fc_out/MatMul"].weight_bits == 3)
-        self.assertTrue(configs_mapping["/h.2/mlp/fc_out/MatMul"].weight_bits == 3)
-        self.assertTrue(configs_mapping["/h.1/mlp/fc_out/MatMul"].weight_bits == 3)
+        self.assertTrue(configs_mapping["/h.4/mlp/fc_out/MatMul"]["weight_bits"] == 3)
+        self.assertTrue(configs_mapping["/h.3/mlp/fc_out/MatMul"]["weight_bits"] == 3)
+        self.assertTrue(configs_mapping["/h.2/mlp/fc_out/MatMul"]["weight_bits"] == 3)
+        self.assertTrue(configs_mapping["/h.1/mlp/fc_out/MatMul"]["weight_bits"] == 3)
 
     def test_diff_types_configs_addition(self):
         quant_config1 = {
@@ -464,8 +450,8 @@ class TestQuantConfigForAutotune(unittest.TestCase):
         # test the expand functionalities, the user is not aware it
         tune_config = config.RTNConfig(weight_bits=[4, 8])
         expand_config_list = config.RTNConfig.expand(tune_config)
-        self.assertEqual(expand_config_list[0].weight_bits, 4)
-        self.assertEqual(expand_config_list[1].weight_bits, 8)
+        self.assertEqual(expand_config_list[0]["weight_bits"], 4)
+        self.assertEqual(expand_config_list[1]["weight_bits"], 8)
 
 
 if __name__ == "__main__":

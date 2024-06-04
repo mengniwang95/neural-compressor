@@ -295,6 +295,15 @@ class BaseConfig(ABC):
                 result[param] = value
         return result
 
+    def __getitem__(self, key):
+        if hasattr(self, key):
+            return getattr(self, key)
+        else:
+            raise KeyError(f"No such attribute: {key}")
+    
+    def __setitem__(self, key, value):
+        setattr(self, key, value)
+
     @classmethod
     def from_dict(cls, config_dict):
         """Construct config from a dict.

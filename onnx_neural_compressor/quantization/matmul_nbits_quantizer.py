@@ -109,7 +109,6 @@ class MatMulNBitsQuantizer:
 
     def _generate_nc_config(self):
         config_class = config.config_registry.get_cls_configs()[self.algorithm.lower()]
-
         quant_kwargs = {
             "weight_bits": self.n_bits,
             "weight_group_size": self.block_size,

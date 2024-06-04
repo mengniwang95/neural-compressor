@@ -106,16 +106,12 @@ def _apply_awq_scale(model, weight_config, absorb_pairs, output_dicts, num_bits,
                 ):  # pragma: no cover
                     # MatMulFpQ4 support 4 bits and 32 group_size with ort 1.16.0 and 1.16.1 versions
                     # MatMulNBits supports 4 bits and 2^n group_size with ort > 1.16.1
-                    q_weight = quant_utils.qdq_tensor(weight, num_bits, group_size, sym, "uint") / np.expand_dims(
-                        scales, axis=-1
-                    )
+                    q_weight = quant_utils.qdq_tensor(weight, num_bits, group_size, sym, "uint")
                 else:
-                    q_weight = quant_utils.qdq_tensor(weight, num_bits, group_size, sym, "int") / np.expand_dims(
-                        scales, axis=-1
-                    )
+                    q_weight = quant_utils.qdq_tensor(weight, num_bits, group_size, sym, "int")
 
-                q_weight = np.reshape(q_weight, (org_w_shape[1], -1))[:, : org_w_shape[0]]
-                out = np.matmul(inp, q_weight.T)
+                q_weight = q_weight[ :org_w_shape[0], :] / np.expand_dims(scales, axis=-1)
+                out = np.matmul(inp, q_weight)
                 loss += np.mean(np.power((org_out - out), 2))
 
             is_best = loss < best_error

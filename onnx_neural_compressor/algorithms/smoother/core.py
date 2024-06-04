@@ -511,7 +511,6 @@ class Smoother:
         Returns:
             the smooth scales for weights, currently one input tensor only have one scale
         """
-        logger.info("Start smooth scales collection.")
         scales = {}
         for tensor, nodes in self.tensors_to_node.items():
             # if scales_per_op the key of scales is the node name, otherwise the activation of node

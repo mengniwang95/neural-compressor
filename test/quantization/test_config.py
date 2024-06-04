@@ -193,8 +193,7 @@ class TestQuantizationConfig(unittest.TestCase):
                 self.assertTrue("add2" not in configs_mapping)
                 self.assertTrue("Matmul" not in configs_mapping)
 
-            # only 1 config without op level quant config
-            self.assertEqual(len(config_loader.config_set), 1)
+            self.assertEqual(len(config_loader.config_set), 4)
 
         for execution_provider in ["DmlExecutionProvider"]:
             tuning_config = tuning.TuningConfig(
@@ -209,7 +208,7 @@ class TestQuantizationConfig(unittest.TestCase):
                 self.assertFalse(configs_mapping["Matmul"]["per_channel"])
                 self.assertEqual(configs_mapping["add"]["calibrate_method"], quantization.CalibrationMethod.MinMax)
                 self.assertEqual(configs_mapping["Matmul"]["calibrate_method"], quantization.CalibrationMethod.MinMax)
-                self.assertLess(idx, 3)
+                self.assertLess(idx, 4)
 
         for execution_provider in ["TensorrtExecutionProvider"]:
             tuning_config = tuning.TuningConfig(
@@ -223,9 +222,9 @@ class TestQuantizationConfig(unittest.TestCase):
                 model_info = quant_config.get_model_info(model=self.simple_onnx_model)
                 configs_mapping = quant_config.to_config_mapping(model_info=model_info)
                 if idx in [0, 2, 4]:
-                    self.assertFalse(configs_mapping["Matmul"]["per_channel"])
+                    self.assertTrue(configs_mapping["Matmul"]["per_channel"])
                 elif idx in [1, 3, 5]:
-                    self.assertTrue(configs_mapping["add"]["per_channel"])
+                    self.assertFalse(configs_mapping["Matmul"]["per_channel"])
                 self.assertEqual(configs_mapping["add"]["calibrate_method"], quantization.CalibrationMethod.MinMax)
                 self.assertEqual(configs_mapping["add"]["calibrate_method"], quantization.CalibrationMethod.MinMax)
                 self.assertTrue(configs_mapping["add"]["weight_sym"])

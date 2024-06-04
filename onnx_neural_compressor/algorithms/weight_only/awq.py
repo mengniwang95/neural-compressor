@@ -258,9 +258,9 @@ def _apply_awq_clip(model, weight_config, absorb_pairs, output_dicts, num_bits, 
                 ):  # pragma: no cover
                     # MatMulFpQ4 support 4 bits and 32 group_size with ort 1.16.0 and 1.16.1 versions
                     # MatMulNBits supports 4 bits and 2^n group_size with ort > 1.16.1
-                    weight = quant_utils.qdq_tensor(weight, num_bits, group_size, scheme, "uint", ratio)
+                    weight = quant_utils.qdq_tensor(weight, num_bits, group_size, sym, "uint", ratio)
                 else:
-                    weight = quant_utils.qdq_tensor(weight, num_bits, group_size, scheme, "int", ratio)
+                    weight = quant_utils.qdq_tensor(weight, num_bits, group_size, sym, "int", ratio)
                 
                 out = np.matmul(inp, weight[:, :org_w_shape[0]])
                 loss = np.mean(np.power((org_out - cur_out), 2))

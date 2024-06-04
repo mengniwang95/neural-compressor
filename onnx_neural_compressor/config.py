@@ -456,7 +456,6 @@ class BaseConfig(ABC):
         model_level_config_lst: List[BaseConfig] = []
         model_params_list = getattr(self, "model_params_list", [])
         tuning_param_list = []
-
         for param in model_params_list:
             tuning_param = self.build_tuning_param(config, param)
             param_val = getattr(config, tuning_param.name)
@@ -476,12 +475,12 @@ class BaseConfig(ABC):
                 logger.info(new_config.to_dict())
                 model_level_config_lst.append(new_config)
 
+        
         # set op level params
         op_params_list = self.params_list
         op_tuning_param_list = []
         local_op_level_config_lst = []
 
-        import pdb;pdb.set_trace()
         for param in op_params_list:
             tuning_param = self.build_tuning_param(config, param)
             param_val = getattr(config, tuning_param.name)
@@ -490,81 +489,24 @@ class BaseConfig(ABC):
                     tuning_param.options = param_val
                     op_tuning_param_list.append(tuning_param)
 
-        import pdb;pdb.set_trace()
         if len(op_tuning_param_list) == 0:
             local_op_level_config_lst = model_level_config_lst
         else:
-            op_type_config_dict, op_name_config_dict = self._get_op_name_op_type_config()
             tuning_param_name_lst = [tuning_param.name for tuning_param in op_tuning_param_list]
             tuning_param_val_lst = list(itertools.product(*[tuning_param.options for tuning_param in op_tuning_param_list]))
-            tuning_param_pair_lst = [dict([tuning_param_name_lst[::-1], val[::-1]]) for val in tuning_param_val_lst]
+            tuning_param_pair_lst = [dict(zip(tuning_param_name_lst[::-1], val[::-1])) for val in tuning_param_val_lst]
 
             for model_level_config in model_level_config_lst:
-                new_config = copy.deepcopy(model_level_config)
                 for tuning_param_pair in tuning_param_pair_lst:
-                    new_config.update(tuning_param_pair)
-                    for config_dict in [op_type_config_dict, op_name_config_dict]:
-                        update_dict = {
-                            key: tuning_param_pair[key]
-                            if isinstance(config_dict[key], list) and key in tuning_param_pair and tuning_param_pair[key] in config_dict[key] else config_dict[key]
-                            for key, val in config_dict.items()
-                        }
-        #             new_cfg = copy.deepcopy(cfg)
-        #             new_cfg.update({
-        #                 key: (cfg[key][val] if val < len(cfg[key]) else cfg[key][-1])
-        #                 if isinstance(cfg[key], list) else cfg[key]
-        #                 for key, val in tuning_param_dict.items()
-        #             })
-        #             model_config.set_local(name, new_cfg)
-
+                    new_config = copy.deepcopy(model_level_config)
+                    for name, val in tuning_param_pair.items():
+                        setattr(new_config, name, val)
+                        for _, cfg in new_config.local_config.items():
+                            if isinstance(getattr(cfg, name, None), list) and val in getattr(cfg, name, None):
+                                setattr(cfg, name, val)
                     logger.info(new_config.to_dict())
                     local_op_level_config_lst.append(new_config)
 
-        # # for format like StaticQuantConfig(per_channel=[True, False]), per_channel=[True, False] is set to each op during initialization
-        # # expand local op config by set_local
-        # params_list = self.params_list
-        # tunable_params = {}
-        # tunable_op_cfg_dict = {}
-        # op_type_config_dict, op_name_config_dict = self._get_op_name_op_type_config()
-
-        # # find tunable params
-        # is_tunable = lambda configuration: isinstance(configuration, list) and len(configuration) > 1
-        # for config_dict in [op_type_config_dict, op_name_config_dict]:
-        #     for name, cfg in config_dict.items():
-        #         # find tunable params of op config from local_config
-        #         tunable_cfg = {k: cfg[k] for k in params_list if k in cfg and is_tunable(cfg[k])}
-
-        #         # merge the tunable value of current op config and previous configs to find all candidate values
-        #         tunable_params.update(
-        #             {key: list(set(tunable_params.get(key, [])) | set(tunable_cfg[key])) for key in set(tunable_params) | set(tunable_cfg) if is_tunable(tunable_cfg.get(key, []))}
-        #         )
-
-        #         # reset the tunable param value of configs later
-        #         if len(tunable_cfg) != 0:
-        #             tunable_op_cfg_dict.update({name: cfg})
-
-        # # follow the reverse order of params_list
-        # tunable_params = {key: range(len(tunable_params[key])) for key in params_list[::-1] if key in tunable_params}
-
-        # # set tunable op config
-        # local_op_level_config_lst = []
-        # if len(tunable_params) > 0:
-        #     combination_lst = list(itertools.product(*tunable_params.values()))
-        #     for i in range(len(combination_lst)):
-        #         local_op_level_config_lst.extend(copy.deepcopy(model_level_config_lst))
-
-        #     for model_config, tuning_idx in zip(local_op_level_config_lst, combination_lst):
-        #         tuning_param_dict = dict(zip(tunable_params.keys(), tuning_idx))
-        #         for name, cfg in tunable_op_cfg_dict.items():
-        #             new_cfg = copy.deepcopy(cfg)
-        #             new_cfg.update({
-        #                 key: (cfg[key][val] if val < len(cfg[key]) else cfg[key][-1])
-        #                 if isinstance(cfg[key], list) else cfg[key]
-        #                 for key, val in tuning_param_dict.items()
-        #             })
-        #             model_config.set_local(name, new_cfg)
-        # else:
-        #     local_op_level_config_lst = model_level_config_lst
         logger.info("Expanded the %s and got %d configs.", self.__class__.name, len(local_op_level_config_lst))
         return local_op_level_config_lst
 
@@ -611,10 +553,7 @@ class BaseConfig(ABC):
     def __eq__(self, other: BaseConfig) -> bool:
         if not isinstance(other, type(self)):
             return False
-        return self.params_list == other.params_list and all(
-            getattr(self, str(attr)) == getattr(other, str(attr)) for attr in self.params_list
-        )
-
+        return self.get_init_args() == other.get_init_args()
 
 class ComposableConfig(BaseConfig):
     name = constants.COMPOSABLE_CONFIG
@@ -852,7 +791,7 @@ class RTNConfig(BaseConfig):
             config_mapping.update(config.get_model_params_dict())
 
             # update node level setting
-            global_config = config.global_config
+            global_config = config.get_params_dict()
             op_type_config_dict, op_name_config_dict = config._get_op_name_op_type_config()
             for op_name, op_type in model_info:
                 if self.global_config is not None:
@@ -914,7 +853,7 @@ class GPTQConfig(BaseConfig):
     ]
     model_params_list: List[Union[str, TuningParam]] = [
         "percdamp",
-        "blocksize",
+        "block_size",
         "actorder",
         "mse",
         "perchannel",
@@ -932,7 +871,7 @@ class GPTQConfig(BaseConfig):
         act_dtype: str = "fp32",
         accuracy_level: int = 0,
         percdamp: float = 0.01,
-        blocksize: int = 128,
+        block_size: int = 128,
         actorder: bool = False,
         mse: bool = False,
         perchannel: bool = True,
@@ -954,7 +893,7 @@ class GPTQConfig(BaseConfig):
                 4 (int8 compute type of jblas kernel). Defaults to 0.
             percdamp (float, optional): percentage of Hessian's diagonal values' average, which will be added
                 to Hessian's diagonal to increase numerical stability. Defaults to 0.01.
-            blocksize (int, optional): execute GPTQ quantization per block. Defaults to 128.
+            block_size (int, optional): execute GPTQ quantization per block. Defaults to 128.
             actorder (bool, optional): whether to sort Hessian's diagonal values to rearrange channel-wise
                 quantization order. Defaults to False.
             mse (bool, optional): whether get scale and zero point with mse error. Defaults to False.
@@ -976,7 +915,7 @@ class GPTQConfig(BaseConfig):
         self.act_dtype = act_dtype
         self.accuracy_level = accuracy_level
         self.percdamp = percdamp
-        self.blocksize = blocksize
+        self.block_size = block_size
         self.actorder = actorder
         self.mse = mse
         self.perchannel = perchannel
@@ -1017,7 +956,7 @@ class GPTQConfig(BaseConfig):
             config_mapping.update(config.get_model_params_dict())
 
             # update node level setting
-            global_config = config.global_config
+            global_config = config.get_params_dict()
             op_type_config_dict, op_name_config_dict = config._get_op_name_op_type_config()
             for op_name, op_type in model_info:
                 if self.global_config is not None:
@@ -1168,7 +1107,7 @@ class AWQConfig(BaseConfig):
             config_mapping.update(config.get_model_params_dict())
 
             # update node level setting
-            global_config = config.global_config
+            global_config = config.get_params_dict()
             op_type_config_dict, op_name_config_dict = config._get_op_name_op_type_config()
             for op_name, op_type in model_info:
                 if self.global_config is not None:

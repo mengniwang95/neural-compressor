@@ -40,7 +40,7 @@ def _gptq(
     num_bits: int = 4,
     group_size: int = 32,
     sym: bool = False,
-    blocksize: int = 128,
+    block_size: int = 128,
     percdamp: float = 0.01,
     actorder: bool = False,
     mse: bool = False,
@@ -54,7 +54,7 @@ def _gptq(
         num_bits (int, optional): num_bits. Default is 4.
         group_size (int, optional): how many elements share one scale/zp. Default is 32.
         sym (bool, optional): sym or asym. Defaults to False.
-        blocksize (int, optional): blocksize to quantize weight.
+        block_size (int, optional): block_size to quantize weight.
         percdamp (float, optional): percent of the average Hessian diagonal to use for dampening.
         actorder (bool, optional): whether rearrange Hessian matrix considering the diag's value.
         mse (bool, optional): whether get scale and zero point with mse error.
@@ -137,8 +137,8 @@ def _gptq(
     H[diag, diag] += damp  # add a average value of
     H = np.linalg.cholesky(np.linalg.inv(H)).T
     Hinv = H
-    for i1 in range(0, shape[0], blocksize):
-        i2 = min(i1 + blocksize, shape[0])
+    for i1 in range(0, shape[0], block_size):
+        i2 = min(i1 + block_size, shape[0])
         count = i2 - i1
 
         W1 = copy.deepcopy(W[i1:i2, :])
@@ -185,7 +185,7 @@ def gptq_quantize(
     group_size: int = 32,
     sym: bool = False,
     percdamp: float = 0.01,
-    blocksize: int = 128,
+    block_size: int = 128,
     actorder: bool = False,
     mse: bool = False,
     perchannel: bool = True,
@@ -214,7 +214,7 @@ def gptq_quantize(
         sym (bool, optional): indicates whether weights are symmetric. Defaults to False.
         percdamp (float, optional): percentage of Hessian's diagonal values' average, which will be added
             to Hessian's diagonal to increase numerical stability. Defaults to 0.01.
-        blocksize (int, optional): execute GPTQ quantization per block. Defaults to 128.
+        block_size (int, optional): execute GPTQ quantization per block. Defaults to 128.
         actorder (bool, optional): whether to sort Hessian's diagonal values to rearrange channel-wise
             quantization order. Defaults to False.
         mse (bool, optional): whether get scale and zero point with mse error. Defaults to False.
@@ -321,7 +321,7 @@ def gptq_quantize(
                 num_bits=num_bits,
                 group_size=group_size,
                 sym=sym,
-                blocksize=blocksize,
+                block_size=block_size,
                 percdamp=percdamp,
                 actorder=actorder,
                 mse=mse,

@@ -402,7 +402,7 @@ class TestONNXRT3xAutoTune(unittest.TestCase):
                 )
 
     def test_dynamic_custom_auto_tune(self):
-        partial_fake_eval = functools.partial(fake_eval, eval_result_lst=[1.0, 0.8, 0.82, 0.81, 1.0, 0.99])
+        partial_fake_eval = functools.partial(fake_eval, eval_result_lst=[1.0, 0.8, 0.99])
         custom_tune_config = tuning.TuningConfig(
             config_set=config.DynamicQuantConfig(
                 per_channel=[True, False],
@@ -423,7 +423,7 @@ class TestONNXRT3xAutoTune(unittest.TestCase):
         self.assertIsNotNone(best_model)
 
     def test_static_default_auto_tune(self):
-        partial_fake_eval = functools.partial(fake_eval, eval_result_lst=[1.0, 0.8, 0.82, 0.81, 1.0, 0.99])
+        partial_fake_eval = functools.partial(fake_eval, eval_result_lst=[1.0, 0.99])
 
         custom_tune_config = tuning.TuningConfig(
             config_set=config.StaticQuantConfig.get_config_set_for_tuning(
@@ -445,7 +445,7 @@ class TestONNXRT3xAutoTune(unittest.TestCase):
         self.assertIsNotNone(best_model)
 
     def test_static_custom_auto_tune(self):
-        partial_fake_eval = functools.partial(fake_eval, eval_result_lst=[1.0, 0.8, 0.82, 0.81, 1.0, 0.99])
+        partial_fake_eval = functools.partial(fake_eval, eval_result_lst=[1.0, 0.8, 0.99])
         custom_tune_config = tuning.TuningConfig(
             config_set=config.StaticQuantConfig(
                 per_channel=[True, False],

@@ -43,6 +43,7 @@ def rtn_quantize_entry(
     configs_mapping = quant_config.to_config_mapping(model_info=model_info)
     logger.debug(configs_mapping)
     model = rtn.apply_rtn_on_model(model, configs_mapping)
+    quant_utils.dump_woq_stats(model, configs_mapping, list(set([i[1] for i in model_info])))
     return model
 
 
@@ -69,6 +70,7 @@ def gptq_quantize_entry(
     # regenerate to ensure data exists
     calibration_data_reader.rewind()
     model = gptq.apply_gptq_on_model(model, configs_mapping, calibration_data_reader)
+    quant_utils.dump_woq_stats(model, configs_mapping, list(set([i[1] for i in model_info])))
     return model
 
 
@@ -95,6 +97,7 @@ def awq_quantize_entry(
     # regenerate to ensure data exists
     calibration_data_reader.rewind()
     model = awq.apply_awq_on_model(model, configs_mapping, calibration_data_reader)
+    quant_utils.dump_woq_stats(model, configs_mapping, list(set([i[1] for i in model_info])))
     return model
 
 import onnxruntime as ort

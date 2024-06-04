@@ -19,6 +19,7 @@
 # limitations under the License.
 
 import enum
+import re
 import struct
 import sys
 from importlib import util
@@ -774,3 +775,48 @@ def dump_model_op_stats(model, quantize_config, fp32_op_list):
     ]
 
     utility.Statistics(output_data, header="Quantization Statistics", field_names=field_names).print_stat()
+
+def dump_woq_stats(model, quantize_config, fp32_op_list):
+    res = {}
+    for optype in fp32_op_list:
+        res[optype] = {}
+
+    dtype_set = set()
+    for node in model.graph.node:
+        if node.op_type in ["MatMulFpQ4", "MatMulNBits"]:
+            optype = "MatMul"
+        else:
+            optype = node.op_type
+
+        if optype not in res:
+            continue
+        if re.fullmatch("^.*_Q\d*G\d*", node.input[1]):
+            search_out = re.search("_Q\d*", node.input[1])
+            dtype = "A32W{}G{}".format(
+                node.input[1][search_out.start() + 2 : search_out.end()], node.input[1][search_out.end() + 1 :]
+            )
+        else:
+            dtype = "FP32"
+        dtype_set.add(dtype)
+
+        if dtype in res[optype]:
+            res[optype][dtype] += 1
+        else:
+            res[optype][dtype] = 1
+
+    dtype_list = list(dtype_set)
+    for dtype in dtype_list:
+        for optype in res.keys():
+            if dtype not in res[optype]:
+                res[optype][dtype] = 0
+
+    # update stats format for dump.
+    field_names = ["Op Type", "Total"]
+    field_names.extend(dtype_list)
+    output_data = []
+    for op_type in res.keys():
+        field_results = [op_type, sum(res[op_type].values())]
+        field_results.extend([res[op_type][dtype] for dtype in dtype_list])
+        output_data.append(field_results)
+
+    utility.Statistics(output_data, header="Mixed Precision Statistics", field_names=field_names).print_stat()

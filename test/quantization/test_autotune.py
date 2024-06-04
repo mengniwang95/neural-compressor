@@ -332,7 +332,6 @@ class TestONNXRT3xAutoTune(unittest.TestCase):
             if i.op_type.startswith("MatMul") and i.input[1].endswith("_Q{}G{}".format(8, 32))
         ]
         self.assertTrue(len(op_names) > 0)
-
         partial_fake_eval = functools.partial(fake_eval, eval_result_lst=[1.0, 0.8, 0.81, 1.0, 0.99, 0.99])
 
         custom_tune_config = tuning.TuningConfig(config_set=config.get_woq_tuning_config())

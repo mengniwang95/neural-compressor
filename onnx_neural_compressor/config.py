@@ -482,9 +482,8 @@ class BaseConfig(ABC):
                 for param_name, param_value in zip(tuning_param_name_lst, params_values):
                     setattr(new_config, param_name, param_value)
                 logger.info(new_config.to_dict())
-                model_level_config_lst.append(new_config)
+                test_static_custom_auto_tune.append(new_config)
 
-        
         # set op level params
         op_params_list = self.params_list
         op_tuning_param_list = []
@@ -811,7 +810,7 @@ class RTNConfig(BaseConfig):
                     if re.match(op_name_pattern, op_name):
                         config_mapping[op_name] = op_name_config_dict[op_name_pattern]
         if not self.quant_last_matmul:
-            config_mapping[model_info[-1]] = {
+            config_mapping[model_info[-1][0]] = {
                 "weight": {"dtype": "fp32"},
                 "activation": {"dtype": "fp32", "quant_mode": "fp32"},
             }
@@ -976,7 +975,7 @@ class GPTQConfig(BaseConfig):
                     if re.match(op_name_pattern, op_name):
                         config_mapping[op_name] = op_name_config_dict[op_name_pattern]
         if not self.quant_last_matmul:
-            config_mapping[model_info[-1]] = {
+            config_mapping[model_info[-1][0]] = {
                 "weight": {"dtype": "fp32"},
                 "activation": {"dtype": "fp32", "quant_mode": "fp32"},
             }
@@ -1127,7 +1126,7 @@ class AWQConfig(BaseConfig):
                     if re.match(op_name_pattern, op_name):
                         config_mapping[op_name] = op_name_config_dict[op_name_pattern]
         if not self.quant_last_matmul:
-            config_mapping[model_info[-1]] = {
+            config_mapping[model_info[-1][0]] = {
                 "weight": {"dtype": "fp32"},
                 "activation": {"dtype": "fp32", "quant_mode": "fp32"},
             }

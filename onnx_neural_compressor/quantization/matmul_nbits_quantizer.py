@@ -126,7 +126,7 @@ class MatMulNBitsQuantizer:
             quant_kwargs.update(
                 {
                     "percdamp": self.algo_config.percdamp,
-                    "blocksize": self.algo_config.block_size,
+                    "block_size": self.algo_config.block_size,
                     "actorder": self.algo_config.actorder,
                     "mse": self.algo_config.mse,
                     "perchannel": self.algo_config.perchannel,

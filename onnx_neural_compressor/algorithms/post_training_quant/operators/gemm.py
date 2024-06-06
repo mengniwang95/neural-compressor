@@ -21,6 +21,7 @@ import onnx
 from onnx_neural_compressor.algorithms.post_training_quant.operators import base_op
 from onnx_neural_compressor.algorithms import utility as quant_utils
 from onnx_neural_compressor import constants
+from onnx_neural_compressor import logger
 from onnx_neural_compressor import utility
 
 
@@ -36,7 +37,6 @@ class GemmOperator(base_op.Operator):
         """Check if quantizaion can be done."""
         node = self.node
         if len(node.input) == 3 and not utility.find_by_name(node.input[2], self.quantizer.model.initializer()):
-            from neural_compressor.utils import logger
 
             logger.warning(
                 "Bias of Gemm node '{}' is not constant. "

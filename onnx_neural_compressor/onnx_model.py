@@ -314,6 +314,7 @@ class ONNXModel(onnx_model.ONNXModel):
         """Remove unused nodes."""
         unused_nodes = []
         nodes = self.nodes()
+
         if len(self._input_name_to_nodes) == 0:
             self._input_name_to_nodes = self.input_name_to_nodes()
         if len(self._output_name_to_node) == 0:
@@ -325,31 +326,22 @@ class ONNXModel(onnx_model.ONNXModel):
                 and node.output[0] not in self._input_name_to_nodes
             ):
                 unused_nodes.append(node)
-            elif (
-                node.op_type == "QuantizeLinear"
-                and len(self.get_children(node)) == 1
-                and self.get_children(node)[0].op_type == "DequantizeLinear"
-                and node.input[0] not in self._output_name_to_node
-                and self.get_children(node)[0].output[0] not in self._input_name_to_nodes
-            ):
-                unused_nodes.append(node)
-                unused_nodes.extend(self.get_children(node))
-            else:
-                # remove the node if it does not serve as the input or output of any other nodes
-                unused = True
-                for output in node.output:
-                    if output in self._input_name_to_nodes or output in self.output():
-                        unused = False
-                        break
-                for input in node.input:
-                    if self.get_initializer(input) is not None:
-                        continue
-                    elif input in self._output_name_to_node or input in self.input():
-                        unused = False
-                        break
-                if unused:
-                    unused_nodes.append(node)
+
         self.remove_nodes(unused_nodes)
+
+        unvalid_nodes = [
+            i
+            for i in self.model.graph.node
+            if all(out not in self._input_name_to_nodes and not self.is_graph_output(out) for out in i.output)
+        ]
+        while len(unvalid_nodes) > 0:
+            self.remove_nodes(unvalid_nodes)
+            self._input_name_to_nodes = self.input_name_to_nodes()
+            unvalid_nodes = [
+                i
+                for i in self.model.graph.node
+                if all([out not in self._input_name_to_nodes and not self.is_graph_output(out) for out in i.output])
+            ]
 
         ununsed_weights = []
         for w in self.model.graph.initializer:
@@ -362,6 +354,7 @@ class ONNXModel(onnx_model.ONNXModel):
 
         self.remove_initializers(ununsed_weights)
         self.update()
+        self.topological_sort()
 
     def topological_sort(self, enable_subgraph=False):
         """Topological sort the model."""
@@ -811,22 +804,7 @@ class ONNXModel(onnx_model.ONNXModel):
         # origin model : ... -> node_1 -> split_node -> node_2 -> ...
         # split model 1: ... -> node_1 -> split_node
         # split model 2: node_2 -> ...
-
-        # remove nodes which are not followed by other nodes
-        unvalid_nodes = [
-            i
-            for i in self.model.graph.node
-            if all(out not in self._input_name_to_nodes and not self.is_graph_output(out) for out in i.output)
-        ]
-        while len(unvalid_nodes) > 0:
-            self.remove_nodes(unvalid_nodes)
-            self._input_name_to_nodes = self.input_name_to_nodes()
-            unvalid_nodes = [
-                i
-                for i in self.model.graph.node
-                if all([out not in self._input_name_to_nodes and not self.is_graph_output(out) for out in i.output])
-            ]
-        self.topological_sort()
+        self.remove_unused_nodes()
 
         split_model_part_1 = onnx.ModelProto()
         split_model_part_1.CopyFrom(self.model)

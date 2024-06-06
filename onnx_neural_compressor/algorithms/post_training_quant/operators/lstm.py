@@ -131,7 +131,7 @@ class LSTMOperator(base_op.Operator):
         for attribute in node.attribute:
             if attribute.name == "layout":
                 continue
-            kwarg = attribute_to_kwarg(attribute)
+            kwarg = quant_utils.attribute_to_kwarg(attribute)
             kwargs.update(kwarg)
 
         quant_lstm_name = node.name + "_quant"

@@ -50,21 +50,20 @@ class TestQuantizationConfig(unittest.TestCase):
 
     @classmethod
     def setUpClass(self):
-        # main_export(
-        #     "hf-internal-testing/tiny-random-gptj",
-        #     output="gptj",
-        # )
+        main_export(
+            "hf-internal-testing/tiny-random-gptj",
+            output="gptj",
+        )
         self.gptj = find_onnx_file("./gptj")
 
-        # simple_onnx_model = build_simple_onnx_model()
-        # onnx.save(simple_onnx_model, "simple_onnx_model.onnx")
+        simple_onnx_model = build_simple_onnx_model()
+        onnx.save(simple_onnx_model, "simple_onnx_model.onnx")
         self.simple_onnx_model = "simple_onnx_model.onnx"
 
     @classmethod
     def tearDownClass(self):
-        pass
-        # shutil.rmtree("gptj", ignore_errors=True)
-        # os.remove("simple_onnx_model.onnx")
+        shutil.rmtree("gptj", ignore_errors=True)
+        os.remove("simple_onnx_model.onnx")
 
     def setUp(self):
         # print the test name

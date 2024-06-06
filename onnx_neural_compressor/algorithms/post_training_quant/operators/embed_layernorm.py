@@ -24,7 +24,7 @@ from onnx_neural_compressor import constants
 from onnx_neural_compressor import utility
 
 
-@base_op.op_registry(op_types="EmbedLayerNormalization", mode=[constants.DYNAMIC_QUANT])
+@base_op.op_registry(op_types="EmbedLayerNormalization", mode=[constants.DYNAMIC_QUANT, constants.STATIC_QUANT])
 class EmbedLayerNormalizationOperator(base_op.Operator):
     """EmbedLayerNormalization Operator."""
 

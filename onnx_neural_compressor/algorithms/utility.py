@@ -81,6 +81,9 @@ ONNX_INT_TYPE_REDUCED_RANGE = {
     onnx.TensorProto.INT8: (-64, 64),
 }
 
+def is_quantizable_type(data_type):
+    return data_type in [onnx.TensorProto.FLOAT, onnx.TensorProto.FLOAT16, onnx.TensorProto.BFLOAT16]
+
 def get_qmin_qmax_for_qType(qType, reduce_range=False, sym=False):  # noqa: N802
     """Get qmin, qmax for qType."""
     if qType == onnx.TensorProto.FLOAT8E4M3FN:
@@ -416,20 +419,20 @@ def calculate_scale_zp(rmin, rmax, quantize_range, qType, sym):
         if sym:
             max_range = np.maximum(abs(rmin), abs(rmax))
             rmin = - max_range
-            rmax = - max_range
+            rmax = max_range
         scale = (rmax - rmin) / (qmax - qmin)
         scale[scale < np.finfo(rmax.dtype).tiny] = 1
-        zero_point = np.multiply(np.ones(rmax.shape), np.round(qmax + qmin / 2.0)).astype(dtype) if sym else \
-            np.round((qmin - rmin) / scale).astype(dtype)
+        zero_point = np.multiply(np.ones(rmax.shape), np.round((qmax + qmin) / 2.0)).astype(dtype) if sym else \
+            np.round(qmin - rmin / scale).astype(dtype)
     else:
         if sym:
             max_range = max(abs(rmin), abs(rmax))
             scale = (float(max_range) * 2) / (qmax - qmin) if max_range > 0 else 1
         else:
             scale = (float(rmax) - float(rmin)) / (qmax - qmin) if rmin != rmax else 1
-        zero_point = np.round(qmax + qmin / 2.0).astype(dtype) if sym else \
-            np.round((qmin - rmin) / scale).astype(dtype)
-    return scale, zero_point
+        zero_point = np.round((qmax + qmin) / 2.0).astype(dtype) if sym else \
+            np.round(qmin - rmin / scale).astype(dtype)
+    return np.float32(scale), zero_point
 
 def quantize_data(data, quantize_range, qType, sym):
     """Quantize data.
@@ -451,8 +454,8 @@ def quantize_data(data, quantize_range, qType, sym):
         qType (int): data type to quantize to. Supported types UINT8 and INT8
         sym (bool): whether use sym quantization.
     """
-    rmin = min(min(data), 0)
-    rmax = max(max(data), 0)
+    rmin = np.min(np.min(data), 0)
+    rmax = np.max(np.max(data), 0)
 
     scale, zero_point = calculate_scale_zp(rmin, rmax, quantize_range, qType, sym)
     quantized_data = quantize_nparray(qType, data, scale, zero_point, low=quantize_range[0], high=quantize_range[1])
@@ -525,18 +528,18 @@ def quantize_data_per_channel(data, axis, quantize_range, qType, sym):
 
 def dequantize_data_with_scale_zero(tensor_value, scale_value, zo_value):  # pragma: no cover
     """Dequantize tensor with scale and zero point."""
-    return (tensor_value.astype(np.float32) - zo_value.astype(np.float32)) * scale_value
+    return (tensor_value.astype(scale_value.dtype) - zo_value.astype(scale_value.dtype)) * scale_value
 
 
 def dequantize_data(tensor_value, scale_value, zo_value, axis=0):  # pragma: no cover
     """Dequantize tensor."""
-    if scale_value.size == 1:
+    if not isinstance(scale_value, np.ndarray):
         return dequantize_data_with_scale_zero(tensor_value, scale_value, zo_value)
     else:
         channel_count = tensor_value.shape[axis]  # TBD, default from axis 0
         new_per_channel_tensor_values = []
         for i in range(channel_count):
-            per_channel_tensor_value = tensor_value.take(i, 0)
+            per_channel_tensor_value = tensor_value.take(i, axis)
             per_channel_scale_value = scale_value.take(i)
             per_channel_zero_value = zo_value.take(i)
             new_per_channel_tensor_values.append(
@@ -546,11 +549,11 @@ def dequantize_data(tensor_value, scale_value, zo_value, axis=0):  # pragma: no 
             )
         # combine per_channel_data into one
         reshape_dims = list(tensor_value.shape)  # deep copy
-        reshape_dims[0] = 1  # only one per channel for reshape
+        reshape_dims[axis] = 1  # only one per channel for reshape
         new_tensor_value = new_per_channel_tensor_values[0].reshape(reshape_dims)
         for i in range(1, channel_count):
             new_per_channel_tensor_value = new_per_channel_tensor_values[i].reshape(reshape_dims)
-            new_tensor_value = np.concatenate((new_tensor_value, new_per_channel_tensor_value), 0)
+            new_tensor_value = np.concatenate((new_tensor_value, new_per_channel_tensor_value), axis)
         return new_tensor_value
 
 

@@ -240,7 +240,6 @@ def _apply_awq_clip(model, weight_config, absorb_pairs, output_dicts, num_bits, 
             org_w_shape = org_weight.shape  # ic, oc
             group_size = group_size if group_size != -1 else org_w_shape[0]
             org_out = np.matmul(inp, org_weight)  # n_token, oc
-            # import pdb;pdb.set_trace()
             k_blocks = (org_w_shape[0] - 1) // group_size + 1
             org_weight = quant_utils.pad_tensor(org_weight, group_size, k_blocks)
 

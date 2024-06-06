@@ -22,7 +22,9 @@
 # --------------------------------------------------------------------------
 """Calibrator for onnx models."""
 
+import copy
 import numpy as np
+from scipy import stats
 
 CALIBRATOR = {}
 
@@ -206,10 +208,6 @@ class EntropyCalibrator(CalibratorBase):
         Returns:
             float: optimal threshold
         """
-        import copy
-
-        from scipy.stats import entropy
-
         hist = histogram[0]
         hist_edges = histogram[1]
         num_bins = hist.size
@@ -266,7 +264,7 @@ class EntropyCalibrator(CalibratorBase):
             q = smooth_distribution(q)
 
             if isinstance(q, np.ndarray):
-                kl_divergence[i - num_half_quantized_bin] = entropy(p, q)
+                kl_divergence[i - num_half_quantized_bin] = stats.entropy(p, q)
             else:
                 kl_divergence[i - num_half_quantized_bin] = float("inf")
 

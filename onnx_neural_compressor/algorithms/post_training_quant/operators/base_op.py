@@ -16,6 +16,8 @@
 # limitations under the License.
 """Base Operator."""
 
+from onnxruntime import quantization
+
 OPERATORS = {
     "dynamic_quant": {},
     "static_quant": {},
@@ -48,25 +50,26 @@ class Operator(object):
         """Initialization."""
         self.quantizer = onnx_quantizer
         self.node = onnx_node
-        if self.node.name in self.quantizer.config:
-            self.dtype = self.quantizer.config[self.node.name]
+        node_name = self.node.name.split("_quant")[0]
+        if node_name in self.quantizer.config:
+            self.dtype = self.quantizer.config[node_name]
         self.disable_qdq_for_node_output = (
             True if onnx_node.op_type in onnx_quantizer.op_types_to_exclude_output_quantization else False
         )
         self.per_channel = False
-        self.calibrate_method = "minmax"
+        self.calibrate_method = quantization.CalibrationMethod.MinMax
         self.weight_sym = True
         self.weight_dtype = None
         self.activation_dtype = None
         self.activation_sym = False
-        if self.node.name in self.quantizer.config:
-            if self.quantizer.config[self.node.name] not in self.quantizer.fallback_list:
-                self.per_channel = self.quantizer.config[self.node.name]["per_channel"]
-                self.calibrate_method = self.quantizer.config[self.node.name]["calibrate_method"]
-                self.weight_sym = self.quantizer.config[self.node.name]["weight_sym"]
-                self.weight_dtype = self.quantizer.config[self.node.name]["weight_type"]
-                self.activation_dtype = self.quantizer.config[self.node.name]["activation_type"]
-                self.activation_sym = self.quantizer.config[self.node.name]["activation_sym"]
+        if node_name in self.quantizer.config:
+            if self.quantizer.config[node_name] not in self.quantizer.fallback_list:
+                self.per_channel = self.quantizer.config[node_name]["per_channel"]
+                self.calibrate_method = self.quantizer.config[node_name]["calibrate_method"]
+                self.weight_sym = self.quantizer.config[node_name]["weight_sym"]
+                self.weight_dtype = self.quantizer.config[node_name]["weight_type"]
+                self.activation_dtype = self.quantizer.config[node_name]["activation_type"]
+                self.activation_sym = self.quantizer.config[node_name]["activation_sym"]
 
     def quantize_check(self):
         """Check if quantizaion can be done."""
@@ -76,7 +79,7 @@ class Operator(object):
         """Do quantizaion."""
         node = self.node
         self.quantizer.quantize_inputs(node)
-        if not self.disable_qdq_for_node_output or self.quantizer.quant_format != "qdq":
+        if not self.disable_qdq_for_node_output:
             self.quantizer.quantize_outputs(node)
 
     def convert_check(self):

@@ -215,8 +215,6 @@ class BaseConfig(ABC):
         white_list: Optional[Union[Union[str, Callable], List[Union[str, Callable]]]] = constants.DEFAULT_WHITE_LIST,
     ) -> None:
         self._global_config: Optional[BaseConfig] = None
-        # For PyTorch, operator_type is the collective name for module type and functional operation type,
-        # for example, `torch.nn.Linear`, and `torch.nn.functional.linear`.
         # local config is the collections of operator_type configs and operator configs
         self._local_config: Dict[str, Optional[BaseConfig]] = {}
         self._white_list = white_list
@@ -327,7 +325,7 @@ class BaseConfig(ABC):
 
     @classmethod
     def to_diff_dict(cls, instance) -> Dict[str, Any]:
-        # TODO (Yi) to implement it
+        # TODO
         return {}
 
     @classmethod
@@ -419,7 +417,7 @@ class BaseConfig(ABC):
             {"model_params": { "reduce_range": [True, False]}} ->
             {"model_params": { "reduce_range": True}}, {"model_params": { "reduce_range": False}}
 
-        case 2: iterate op_params first (Add only supports per_tensor)
+        case 2: iterate op_params first (for this case, Add op only supports per_tensor)
             {"model_params": { "reduce_range": [True, False]}, "op_params": {"per_channel": [True, False]}} ->
             {"model_params": { "reduce_range": True}, "op_params": {"per_channel": True}}
             {"model_params": { "reduce_range": True}, "op_params": {"per_channel": False}}
@@ -431,34 +429,6 @@ class BaseConfig(ABC):
             {"model_params": { "reduce_range": True},  "op_params": {"Conv": {"per_channel": False}, "Add": {"per_channel": False}}},
             {"model_params": { "reduce_range": False},  "op_params": {"Conv": {"per_channel": True}, "Add": {"per_channel": False}}},
             {"model_params": { "reduce_range": False},  "op_params": {"Conv": {"per_channel": False}, "Add": {"per_channel": False}}},
-
-        case 3: following the order of params_list to iterate local config,
-                the same tuning param of different local config keeps same or use the last index value in tuning list
-            {"model_params": {"reduce_range": [True, False]},
-             "op_params": {"Conv": {"per_channel": [True, False], "calibrate_method": ["minmax", "entropy", "percentile"]},
-                           "MatMul": {"calibrate_method": ["minmax", "entropy"]}}} ->
-            {"model_params": {"reduce_range": True},
-             "op_params": {"Conv": {"per_channel": True, "calibrate_method": "minmax"},
-                           "MatMul": {"calibrate_method": "minmax"}}}
-            {"model_params": {"reduce_range": True},
-             "op_params": {"Conv": {"per_channel": False, "calibrate_method": "minmax"},
-                           "MatMul": {"calibrate_method": "minmax"}}}
-            {"model_params": {"reduce_range": True},
-             "op_params": {"Conv": {"per_channel": True, "calibrate_method": "entropy"},
-                           "MatMul": {"calibrate_method": "entropy"}}}
-            {"model_params": {"reduce_range": True},
-             "op_params": {"Conv": {"per_channel": False, "calibrate_method": "entropy"},
-                           "MatMul": {"calibrate_method": "entropy"}}}
-            {"model_params": {"reduce_range": True},
-             "op_params": {"Conv": {"per_channel": True, "calibrate_method": "percentile"},
-                           "MatMul": {"calibrate_method": "entropy"}}}  # "percentile" not in tuning list, use the last index value
-            {"model_params": {"reduce_range": True},
-             "op_params": {"Conv": {"per_channel": False, "calibrate_method": "percentile"},
-                           "MatMul": {"calibrate_method": "entropy"}}}
-            {"model_params": {"reduce_range": False},
-             "op_params": {"Conv": {"per_channel": True, "calibrate_method": "minmax"},
-                           "MatMul": {"calibrate_method": "minmax"}}}
-                ...
         """
         config = self
         # set model level params
@@ -1285,6 +1255,21 @@ class StaticQuantConfig(BaseConfig, quantization.StaticQuantConfig):
             execution_provider = utility.auto_detect_ep()
         if op_types_to_quantize is None:
             op_types_to_quantize = constants.STATIC_QOPERATOR_OP_LIST_MAP.get(execution_provider, []) if quant_format == quantization.QuantFormat.QOperator else constants.STATIC_QDQ_OP_LIST_MAP.get(execution_provider, [])
+        if not reduce_range and not utility.CpuInfo().vnni:
+            logger.warning(
+                "VNNI is not supported and reduce_range=False, reduce_range=True is recommended to avoid potential accuracy issue."
+            )
+        # do not load TensorRT if backend is not TensorrtExecutionProvider
+        if "TensorrtExecutionProvider" in execution_provider:
+            logger.info("Update some parameters for TensorrtExecutionProvider")
+            os.environ["ORT_TENSORRT_INT8_ENABLE"] = "0"
+            extra_options.update({
+                "add_qdq_pair_to_weight": True,
+                "dedicated_qdq_pair": True,
+                "optypes_to_exclude_output_quant": ["Conv", "Gemm", "Add", "MatMul"],
+            })
+        else:
+            os.environ["ORT_TENSORRT_UNAVAILABLE"] = "1"
         quantization.StaticQuantConfig.__init__(
             self,
             calibration_data_reader=calibration_data_reader,
@@ -1397,15 +1382,6 @@ class StaticQuantConfig(BaseConfig, quantization.StaticQuantConfig):
             quant_last_matmul=[True, False],
             per_channel=[True, False],
         )
-        # cfg.op_types_to_quantize = op_types_to_quantize
-        # for optype in cfg.op_types_to_quantize:
-        #     supported_config = [i for i in StaticQuantConfig.supported_configs if optype in i.operators]
-        #     if len(supported_config) == 0:
-        #         continue
-        #     config = supported_config[0].config
-        #     for valid_func in supported_config[0].valid_func_list:
-        #         config = valid_func(config, optype, execution_provider, quant_format)
-        #     cfg.set_local(optype, config)
         return cfg
 
     @classmethod
@@ -1630,6 +1606,10 @@ class DynamicQuantConfig(BaseConfig, quantization.DynamicQuantConfig):
             execution_provider = utility.auto_detect_ep()
         if op_types_to_quantize is None:
             op_types_to_quantize = constants.DYNAMIC_OP_LIST_MAP.get(execution_provider, [])
+        if not reduce_range and not utility.CpuInfo().vnni:
+            logger.warning(
+                "VNNI is not supported and reduce_range=False, reduce_range=True is recommended to avoid potential accuracy issue."
+            )
         quantization.DynamicQuantConfig.__init__(
             self,
             weight_type=weight_type,
@@ -1733,15 +1713,6 @@ class DynamicQuantConfig(BaseConfig, quantization.DynamicQuantConfig):
             quant_last_matmul=[True, False],
             per_channel=[True, False],
         )
-        # cfg.op_types_to_quantize = op_types_to_quantize
-        # for optype in cfg.op_types_to_quantize:
-        #     supported_config = [i for i in DynamicQuantConfig.supported_configs if optype in i.operators]
-        #     if len(supported_config) == 0:
-        #         continue
-        #     config = supported_config[0].config
-        #     for valid_func in supported_config[0].valid_func_list:
-        #         config = valid_func(config, optype, execution_provider)
-        #     cfg.set_local(optype, config)
         return cfg
 
     @classmethod

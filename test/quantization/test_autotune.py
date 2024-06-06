@@ -76,17 +76,16 @@ class TestONNXRT3xAutoTune(unittest.TestCase):
 
     @classmethod
     def setUpClass(self):
-        # main_export(
-        #     "hf-internal-testing/tiny-random-gptj",
-        #     output="gptj",
-        # )
+        main_export(
+            "hf-internal-testing/tiny-random-gptj",
+            output="gptj",
+        )
         self.gptj = glob.glob(os.path.join("./gptj", "*.onnx"))[0]
         self.data_reader = DataReader(self.gptj)
 
     @classmethod
     def tearDownClass(self):
-        pass
-        # shutil.rmtree("./gptj", ignore_errors=True)
+        shutil.rmtree("./gptj", ignore_errors=True)
 
     @mock.patch("logging.Logger.warning")
     def test_auto_tune_warning(self, mock_warning):

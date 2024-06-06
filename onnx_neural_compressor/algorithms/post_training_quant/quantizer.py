@@ -152,22 +152,128 @@ class Quantizer:
         else:
             return False
 
-    def quantize_model(self):
-        """Quantize onnx model."""
-        # step 1: insert q-dq pairs
-        self.insert_qdq()
-
-        # step 2: convert q-node-dq to qoperator format if needed
-        if self.quant_format != "qdq":
-            self.remove_duplicate_qdq_paris()
-            self.convert_qdq_to_operator_oriented()
-
+    def _postprocess(self):
+        if "TensorrtExecutionProvider" in self.execution_provider:
+            quant_utils.trt_env_setup(self.model.model)
+        self.merge_dedicated_qdq_pair()
         self.model.remove_unused_nodes()
 
         self.model.model.producer_name = quant_utils.__producer__
         self.model.model.producer_version = quant_utils.__version__
 
+    def quantize_model(self):
+        """Quantize onnx model."""
+        # step 1: insert q-dq pairs
+        self.insert_qdq()
+        self.remove_duplicate_qdq_paris()
+
+        # step 2: convert q-node-dq to qoperator format if needed
+        if self.quant_format != "qdq":
+            self.convert_qdq_to_operator_oriented()
+
+        self._postprocess()
         return self.model.model
+
+    def merge_dedicated_qdq_pair(self):
+        """Merge dedicated Q/DQ pairs."""
+        self.remove_nodes = []
+        self.replace_input = []
+        self.new_nodes = []
+        if self.quant_format == "qdq" and self.dedicated_qdq_pair:
+            #    node         node
+            #     |           / \
+            #     q     ->   q   q
+            #    / \        /     \
+            #  dq   dq    dq       dq
+            for node in self.model.nodes():
+                if node.op_type in ["QuantizeLinear"]:
+                    children = self.model.get_children(node)
+                    if len([i for i in children if i.op_type in ["DequantizeLinear"]]) < 2:
+                        continue
+                    for idx, child in enumerate(children):
+                        if child.op_type not in ["DequantizeLinear"]:
+                            continue
+                        if self.should_quantize(self.model.get_children(child)[0]):
+                            inputs = [self.model.get_parents(node)[0].output[0], node.input[1], node.input[2]]
+                            self.new_nodes.append(
+                                onnx.helper.make_node(
+                                    "QuantizeLinear",
+                                    inputs,
+                                    [node.output[0] + "_" + str(idx)],
+                                    node.name + "_" + str(idx),
+                                )
+                            )
+                            self.replace_input.append([child, node.output[0], node.output[0] + "_" + str(idx)])
+                        else:
+                            self.remove_nodes.append(child)
+                            self.replace_input.append(
+                                [self.model.get_children(child)[0], child.output[0], node.input[0]]
+                            )
+                    self.remove_nodes.append(node)
+            self.model.remove_nodes(self.remove_nodes)
+            self.model.graph().node.extend(self.new_nodes)
+            for node, old_input_name, new_input_name in self.replace_input:
+                self.model.replace_node_input(node, old_input_name, new_input_name)
+            self.model.update()
+
+        elif self.quant_format != "qdq" or not self.dedicated_qdq_pair:
+            #      node            node
+            #      /  \      ->     |
+            #   q(dq)  q(dq)      q(dq)
+            target_type = ["QuantizeLinear", "DequantizeLinear"]
+            for op_type in target_type:
+                for node in self.model.nodes():
+                    children = self.model.get_children(node)
+                    dq_nodes = [i for i in children if i.op_type == op_type]
+                    if len(dq_nodes) < 2 or node.op_type in ["Split"]:
+                        continue
+                    datas = []
+                    for n in dq_nodes:
+                        datas.append(
+                            [
+                                onnx.numpy_helper.to_array(utility.find_by_name(n.input[1], self.model.initializer())),
+                                onnx.numpy_helper.to_array(utility.find_by_name(n.input[2], self.model.initializer())),
+                            ]
+                        )
+                    for idx, data in enumerate(datas):
+                        repeaded_id = [i for i, item in enumerate(datas[idx:]) if item == data]
+                        for i in repeaded_id[1:]:
+                            self.remove_nodes.append(dq_nodes[i])
+                            self.replace_input.append(
+                                [
+                                    self.model.get_children(dq_nodes[i])[0],
+                                    dq_nodes[i].output[0],
+                                    dq_nodes[idx].output[0],
+                                ]
+                            )
+                self.model.remove_nodes(self.remove_nodes)
+                self.model.graph().node.extend(self.new_nodes)
+                for node, old_input_name, new_input_name in self.replace_input:
+                    self.model.replace_node_input(node, old_input_name, new_input_name)
+                self.model.update()
+
+        if self.quant_format == "qdq":
+            #       node          node
+            #     /  |  \          |
+            #    A   q   B   ->    q
+            #        |             |
+            #        dq            dq
+            #                    /   \
+            #                   A     B
+            for node in self.model.nodes():
+                if node.op_type in ["QuantizeLinear"] and len(self.model.get_parents(node)) > 0:
+                    if "QuantizeLinear" in [sibling.op_type for sibling in self.model.get_siblings(node)]:
+                        continue
+                    for sibling in self.model.get_siblings(node):
+                        if not self.should_quantize(sibling) and sibling.op_type in base_op.OPERATORS[self.mode]:
+                            for inp_idx in range(len(sibling.input)):
+                                if sibling.input[inp_idx] == node.input[0]:
+                                    self.replace_input.append(
+                                        [sibling, sibling.input[inp_idx], self.model.get_children(node)[0].output[0]]
+                                    )
+            for node, old_input_name, new_input_name in self.replace_input:
+                self.model.replace_node_input(node, old_input_name, new_input_name)
+            self.model.update()
 
     def remove_duplicate_qdq_paris(self):
         """Remove duplicated qdq pairs."""
@@ -400,6 +506,31 @@ class Quantizer:
 
         return (weight.name + "_quantized", weight.name + "_zero_point", weight.name + "_scale")
 
+
+    def dequantize_tensor(self, node, value_name):
+        """Dequantize tensor."""
+        if value_name in self.quantized_value_map:
+            quantized_value = self.quantized_value_map[value_name]
+            dqlinear_name = value_name + "_DequantizeLinear"
+            dqlinear_inputs = [value_name + "_quantized", quantized_value.scale_name, quantized_value.zp_name]
+            dequantize_node = onnx.helper.make_node("DequantizeLinear", dqlinear_inputs, [value_name], dqlinear_name)
+            if dequantize_node not in self.new_nodes:
+                self.new_nodes.append(dequantize_node)
+        else:  # pragma: no cover
+            data_found, scale_name, zp_name, _, _ = self._get_quantization_params(value_name)
+            if self.static:
+                if data_found is False:
+                    raise ValueError(
+                        "Quantization parameters are not specified for param {}."
+                        "In static mode quantization params for inputs and outputs "
+                        "of nodes to be quantized are required.".format(value_name)
+                    )
+            dqlinear_name = value_name + "_DequantizeLinear"
+            dqlinear_inputs = [value_name + "_quantized", scale_name, zp_name]
+            dequantize_node = onnx.helper.make_node("DequantizeLinear", dqlinear_inputs, [value_name], dqlinear_name)
+            if dequantize_node not in self.new_nodes:
+                self.new_nodes.append(dequantize_node)
+
     def _update_weight(self, weight):
         """Update weight.
 
@@ -430,7 +561,7 @@ class Quantizer:
             zero_scale_shape = []
         zero_point_type = weight.qType
         scale_initializer = onnx.helper.make_tensor(
-            scale_name, onnx.TensorProto.FLOAT, zero_scale_shape, weight.scales
+            scale_name, weight.initializer.data_type, zero_scale_shape, weight.scales
         )
         zero_initializer = onnx.helper.make_tensor(
             zero_point_name, zero_point_type, zero_scale_shape, weight.zero_points
@@ -441,7 +572,7 @@ class Quantizer:
     @staticmethod
     def tensor_proto_to_array(initializer, base_dir=""):
         """Convert TensorProto to array."""
-        if initializer.data_type == onnx.TensorProto.FLOAT:
+        if quant_utils.is_quantizable_type(initializer.data_type):
             weights = onnx.numpy_helper.to_array(initializer, base_dir)
         else:
             raise ValueError(
@@ -478,11 +609,12 @@ class Quantizer:
         scale_values = [params[1]]
         scale_shape = []
         scale_name = param_name + "_scale"
+        scale_dtype = onnx.helper.np_dtype_to_tensor_dtype(params[1].dtype)
 
         # Add initializers
         init_zp = onnx.helper.make_tensor(zero_point_name, zero_point_type, zero_point_shape, zero_point_values)
         self.model.add_initializer(init_zp)
-        init_scale = onnx.helper.make_tensor(scale_name, onnx.TensorProto.FLOAT, scale_shape, scale_values)
+        init_scale = onnx.helper.make_tensor(scale_name, scale_dtype, scale_shape, scale_values)
         self.model.add_initializer(init_scale)
 
         return True, scale_name, zero_point_name, scale_shape, zero_point_shape
@@ -526,7 +658,7 @@ class Quantizer:
         """Check weight can be quantized."""
         weight = utility.find_by_name(weight_name, self.model.initializer())
         if weight is not None:
-            return weight.data_type == onnx.TensorProto.FLOAT
+            return quant_utils.is_quantizable_type(weight.data_type)
         else:
             return weight_name in self.quantized_value_map
 
@@ -571,13 +703,11 @@ class Quantizer:
 
     def quantize_outputs(self, node, initializer_use_weight_qType=True, direct_int8=False):
         """Quantize node outputs."""
-        if self.quant_format != "qoperator":
-            return
         for idx, tensor_name in enumerate(node.output):
             if (
                 tensor_name in self.value_infos
                 and self.value_infos[tensor_name].type.HasField("tensor_type")
-                and self.value_infos[tensor_name].type.tensor_type.elem_type != onnx.TensorProto.FLOAT # TODO
+                and not quant_utils.is_quantizable_type(self.value_infos[tensor_name].type.tensor_type.elem_type)
             ):
                 return
             data_found = False
@@ -631,7 +761,7 @@ class Quantizer:
                 continue
             initializer = utility.find_by_name(tensor_name, self.model.initializer())
             if initializer is not None:
-                if initializer.data_type != onnx.TensorProto.FLOAT: # TODO
+                if not quant_utils.is_quantizable_type(initializer.data_type):
                     return
 
                 dtype = (
@@ -677,7 +807,7 @@ class Quantizer:
                 if (
                     tensor_name in self.value_infos
                     and self.value_infos[tensor_name].type.HasField("tensor_type")
-                    and self.value_infos[tensor_name].type.tensor_type.elem_type != onnx.TensorProto.FLOAT
+                    and not quant_utils.is_quantizable_type(self.value_infos[tensor_name].type.tensor_type.elem_type)
                 ):
                     return
                 self._quantize_activation(node, tensor_name, direct_int8)
@@ -759,20 +889,55 @@ class StaticQuantizer(Quantizer):
             quantization_params=quantization_params,
             op_types_to_quantize=op_types_to_quantize,
             )
+        self.fallback_list = fallback_list
+        self.reduce_range = reduce_range
+        self.add_qdq_pair_to_weight = add_qdq_pair_to_weight
+        self.optypes_to_exclude_output_quant = optypes_to_exclude_output_quant
+        self.dedicated_qdq_pair = dedicated_qdq_pair
+        self.execution_provider = execution_provider
         self.static = True  # use static quantization for inputs.
-        self.quant_format = "qoperator" if quant_format.value == 0 else "qdq"
+        self.quant_format = quant_format
         if self.opset_version < 13 and self.quant_format == "qdq":
             logger.warning(
                 "Per-channel support with QDQ format requires opset version >= 13,"
                 " use per-tensor granularity instead"
             )
+        if "TensorrtExecutionProvider" in execution_provider:
+
+            # TensorrtExecutionProvider doesn't support Conv + Add fusion
+            self._revert_conv_add_fusion()
+
+            # only quantize Add which is followed by ReduceMean
+            for node in self.model.nodes()
+                if node.op_type == "Add":
+                    children = self.model.get_children(node)
+                    if "ReduceMean" not in [i.op_type for i in children]:
+                        self.config[node.name] = "fp32"
+
+    def _revert_conv_add_fusion(self):
+        add_nodes = []
+        remove_nodes = []
+        for node in self.model.nodes():
+            if node.op_type == "Conv" and len(node.input) == 3:
+                bias_tensor = self.model.get_initializer(node.input[2])
+                bias_array = numpy_helper.to_array(bias_tensor).reshape((-1, 1, 1))
+                self.model.remove_initializer(bias_tensor)
+                self.model.add_initializer(numpy_helper.from_array(bias_array, bias_tensor.name))
+                kwargs = {}
+                activation_params = None
+                for attr in node.attribute:
+                    kwargs.update(quant_utils.attribute_to_kwarg(attr))
+                conv = onnx.helper.make_node("Conv", node.input[0:2], [node.name + "_revert"], node.name, **kwargs)
+                add = onnx.helper.make_node("Add", [conv.output[0], node.input[2]], node.output, node.name + "_add")
+                add_nodes.extend([conv, add])
+
+        self.model.remove_nodes(remove_nodes)
+        self.model.add_nodes(add_nodes)
+        self.model.update()
 
     def _quantize_activation(self, node, tensor_name, direct_int8=False):
         """Quantize node activation."""
         if tensor_name in self.quantized_value_map:
-            # node input is model input and it has been quantized, don't insert QDQ pair
-            if tensor_name in self.model.input():
-                return
             scale_name = self.quantized_value_map[tensor_name].scale_name
             zp_name = self.quantized_value_map[tensor_name].zp_name
             data_found = True
@@ -804,6 +969,9 @@ class StaticQuantizer(Quantizer):
             else tensor_name + "_dequantized"
         )
         self.replace_input.append([node, tensor_name, dq_output])
+
+        if tensor_name in self.model.input() and tensor_name in self.quantized_value_map:
+            return
 
         quant_node_name = tensor_name + "_" + node.name + "_QuantizeLinear"
         dequant_node_name = tensor_name + "_" + node.name + "_DequantizeLinear"

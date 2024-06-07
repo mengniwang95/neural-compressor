@@ -16,6 +16,7 @@
 # limitations under the License.
 """Base Operator."""
 
+from onnx_neural_compressor import constants
 from onnxruntime import quantization
 
 OPERATORS = {
@@ -79,7 +80,7 @@ class Operator(object):
         """Do quantizaion."""
         node = self.node
         self.quantizer.quantize_inputs(node)
-        if not self.disable_qdq_for_node_output:
+        if not self.disable_qdq_for_node_output or self.quantizer.mode != constants.DYNAMIC_QUANT:
             self.quantizer.quantize_outputs(node)
 
     def convert_check(self):

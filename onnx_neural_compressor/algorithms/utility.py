@@ -19,6 +19,7 @@
 # limitations under the License.
 
 import enum
+import os
 import re
 import struct
 import sys

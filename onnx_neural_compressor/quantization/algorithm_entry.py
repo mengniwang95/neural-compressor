@@ -17,6 +17,7 @@ import tempfile
 from typing import Union
 
 import onnx
+import onnxruntime as ort
 from onnx_neural_compressor import config
 from onnx_neural_compressor import constants
 from onnx_neural_compressor import data_reader
@@ -100,7 +101,6 @@ def awq_quantize_entry(
     quant_utils.dump_woq_stats(model, configs_mapping, list(set([i[1] for i in model_info])))
     return model
 
-import onnxruntime as ort
 ###################### Static quant Entry ##################################
 @utility.register_algo(name=constants.STATIC_QUANT)
 def static_quantize_entry(
@@ -138,7 +138,7 @@ def static_quantize_entry(
     _quantizer = quantizer.StaticQuantizer(
         model,
         configs_mapping,
-        quant_format=quant_config.quant_format,
+        quant_format=quant_config.quant_format.name.lower(),
         quantization_params=quantize_params,
         op_types_to_quantize=quant_config.op_types_to_quantize,
         execution_provider=quant_config.execution_provider,

@@ -43,7 +43,7 @@ class GatherOperator(base_op.Operator):
         """Do quantizaion."""
         node = self.node
         self.quantizer.quantize_inputs(node, [0], initializer_use_weight_qType=False)
-        if not self.disable_qdq_for_node_output or self.quantizer.quant_format != "qdq":
+        if not self.disable_qdq_for_node_output or self.quantizer.mode != constants.DYNAMIC_QUANT:
             self.quantizer.quantize_outputs(node)
         node.name = node.name + "_quant"
 

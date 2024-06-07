@@ -213,8 +213,8 @@ class TestBaseConfig(unittest.TestCase):
         mixed_config = fake_config + fake1_config
         model_info = mixed_config.get_model_info(model)
         config_mapping = mixed_config.to_config_mapping(model_info=model_info)
-        self.assertIn(OP1_NAME, [op_info[0] for op_info in config_mapping])
-        self.assertIn(OP2_NAME, [op_info[0] for op_info in config_mapping])
+        self.assertIn(OP1_NAME, config_mapping)
+        self.assertIn(OP2_NAME, config_mapping)
 
 
 class TestConfigSet(unittest.TestCase):
@@ -251,7 +251,7 @@ class TestConfigLoader(unittest.TestCase):
 
     def test_config_loader_skip_verified_config(self) -> None:
         config_set = [FakeAlgoConfig(weight_bits=[4, 8]), FakeAlgoConfig(weight_bits=8)]
-        config_loader = ConfigLoader(config_set)
+        config_loader = tuning.ConfigLoader(config_set)
         config_count = 0
         for i, config in enumerate(config_loader):
             config_count += 1

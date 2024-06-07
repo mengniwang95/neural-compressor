@@ -908,7 +908,7 @@ class StaticQuantizer(Quantizer):
             self._revert_conv_add_fusion()
 
             # only quantize Add which is followed by ReduceMean
-            for node in self.model.nodes()
+            for node in self.model.nodes():
                 if node.op_type == "Add":
                     children = self.model.get_children(node)
                     if "ReduceMean" not in [i.op_type for i in children]:

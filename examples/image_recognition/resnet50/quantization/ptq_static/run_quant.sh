@@ -40,7 +40,7 @@ function run_tuning {
             --dataset_location ${dataset_location} \
             --label_path ${label_path-${dataset_location}/../val.txt} \
             --output_model ${output_model} \
-            --quant_format ${quant_format-default} \
+            --quant_format ${quant_format-QOperator} \
             --tune
 }
 

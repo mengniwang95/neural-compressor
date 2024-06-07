@@ -24,11 +24,12 @@ import onnx
 import re
 import os
 import collections
-import PIL
+from PIL import Image
 import onnxruntime as ort
 from sklearn import metrics
 from onnx_neural_compressor import data_reader
 from onnx_neural_compressor import config
+from onnx_neural_compressor import quantization
 from onnx_neural_compressor.quantization import tuning
 
 logger = logging.getLogger(__name__)
@@ -134,7 +135,7 @@ class Dataloader:
                 self.label_list.append(int(label))
 
     def _preprpcess(self, src):
-        with PIL.Image.open(src) as image:
+        with Image.open(src) as image:
             image = np.array(image.convert('RGB')).astype(np.float32)
             image = image / 255.
             image = cv2.resize(image, (256, 256), interpolation=cv2.INTER_LINEAR)
@@ -194,7 +195,7 @@ class Dataloader:
 
 
 class DataReader(data_reader.CalibrationDataReader):
-    def __init__(self, model_path, dynamic_length=False, batch_size=1, calibration_sampling_size=-1):
+    def __init__(self, model_path, dataset_location, image_list, batch_size=1, calibration_sampling_size=-1):
         self.batch_size = batch_size
         self.image_list = []
         self.label_list = []
@@ -217,14 +218,15 @@ class DataReader(data_reader.CalibrationDataReader):
                         break
                     src_lst = []
                     label_lst = []
-        self.image_list.append(src_lst)
-        self.label_list.append(label_lst)
+        if len(src_lst) > 0:
+            self.image_list.append(src_lst)
+            self.label_list.append(label_lst)
         model = onnx.load(model_path, load_external_data=False)
         self.inputs_names = [input.name for input in model.graph.input]
         self.iter_next = iter(self.image_list)
 
     def _preprpcess(self, src):
-        with PIL.Image.open(src) as image:
+        with Image.open(src) as image:
             image = np.array(image.convert('RGB')).astype(np.float32)
             image = image / 255.
             image = cv2.resize(image, (256, 256), interpolation=cv2.INTER_LINEAR)
@@ -249,11 +251,11 @@ class DataReader(data_reader.CalibrationDataReader):
         self.iter_next = iter(self.image_list)
 
 
-def eval_func(model, data_reader, metric):
+def eval_func(model, dataloader, metric):
     metric.reset()
-    sess = ort.InferenceSession(model.SerializeToString(), providers=ort.get_available_providers())
-    labels = data_reader.label_list
-    for idx, batch in enumerate(data_reader):
+    sess = ort.InferenceSession(model, providers=ort.get_available_providers())
+    labels = dataloader.label_list
+    for idx, batch in enumerate(dataloader):
         output = sess.run(None, batch)
         metric.update(output, labels[idx])
     return metric.result()
@@ -303,8 +305,8 @@ if __name__ == "__main__":
     parser.add_argument(
         '--quant_format',
         type=str,
-        default='default', 
-        choices=['default', 'QDQ', 'QOperator'],
+        default='QOperator',
+        choices=['QDQ', 'QOperator'],
         help="quantization format"
     )
     parser.add_argument(
@@ -316,9 +318,12 @@ if __name__ == "__main__":
 
     model = onnx.load(args.model_path)
     top1 = TopK()
+    dataloader = DataReader(args.model_path, args.dataset_location, args.label_path, args.batch_size)
+    def eval(onnx_model):
+        dataloader.rewind()
+        return eval_func(onnx_model, dataloader, top1)
 
     if args.benchmark:
-        data_reader = DataReader(args.model_path)
         if args.mode == 'performance':
             total_time = 0.0
             num_iter = 100
@@ -333,7 +338,7 @@ if __name__ == "__main__":
             len_inputs = len(session.get_inputs())
             inputs_names = [session.get_inputs()[i].name for i in range(len_inputs)]
             
-            for idx, batch in enumerate(data_reader):
+            for idx, batch in enumerate(dataloader):
                 if idx + 1 > num_iter:
                     break
                 tic = time.time()
@@ -347,22 +352,20 @@ if __name__ == "__main__":
             throughput = (num_iter - num_warmup) / total_time
             print("Throughput: {} samples/s".format(throughput))
         elif args.mode == 'accuracy':
-            def eval(onnx_model):
-                return eval_func(onnx_model, data_reader, top1)
-
-            acc_result = eval(model)
-            print("Batch size = %d" % data_reader.batch_size)
+            acc_result = eval_func(model, dataloader, top1)
+            print("Batch size = %d" % dataloader.batch_size)
             print("Accuracy: %.5f" % acc_result)
 
     if args.tune:
-        calibration_data_reader = DataReader(args.model_path, calibration_sampling_size=100)
+        calibration_data_reader = DataReader(args.model_path, args.dataset_location, args.label_path, args.batch_size, calibration_sampling_size=100)
+
         custom_tune_config = tuning.TuningConfig(
             config_set=config.StaticQuantConfig.get_config_set_for_tuning(
                 quant_format=quantization.QuantFormat.QOperator if args.quant_format == "QOperator" else quantization.QuantFormat.QDQ,
             )
         )
         best_model = tuning.autotune(
-            model_input=model,
+            model_input=args.model_path,
             tune_config=custom_tune_config,
             eval_fn=eval,
             calibration_data_reader=calibration_data_reader,

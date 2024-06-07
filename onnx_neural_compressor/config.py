@@ -23,6 +23,7 @@ import enum
 import inspect
 import itertools
 import json
+import os
 import pathlib
 import re
 from abc import ABC
@@ -452,7 +453,7 @@ class BaseConfig(ABC):
                 for param_name, param_value in zip(tuning_param_name_lst, params_values):
                     setattr(new_config, param_name, param_value)
                 logger.info(new_config.to_dict())
-                test_static_custom_auto_tune.append(new_config)
+                model_level_config_lst.append(new_config)
 
         # set op level params
         op_params_list = self.params_list
@@ -1259,17 +1260,6 @@ class StaticQuantConfig(BaseConfig, quantization.StaticQuantConfig):
             logger.warning(
                 "VNNI is not supported and reduce_range=False, reduce_range=True is recommended to avoid potential accuracy issue."
             )
-        # do not load TensorRT if backend is not TensorrtExecutionProvider
-        if "TensorrtExecutionProvider" in execution_provider:
-            logger.info("Update some parameters for TensorrtExecutionProvider")
-            os.environ["ORT_TENSORRT_INT8_ENABLE"] = "0"
-            extra_options.update({
-                "add_qdq_pair_to_weight": True,
-                "dedicated_qdq_pair": True,
-                "optypes_to_exclude_output_quant": ["Conv", "Gemm", "Add", "MatMul"],
-            })
-        else:
-            os.environ["ORT_TENSORRT_UNAVAILABLE"] = "1"
         quantization.StaticQuantConfig.__init__(
             self,
             calibration_data_reader=calibration_data_reader,
@@ -1285,6 +1275,18 @@ class StaticQuantConfig(BaseConfig, quantization.StaticQuantConfig):
             use_external_data_format=use_external_data_format,
             extra_options=extra_options,
         )
+        # do not load TensorRT if backend is not TensorrtExecutionProvider
+        if "TensorrtExecutionProvider" in execution_provider:
+            logger.info("Update some parameters for TensorrtExecutionProvider")
+            os.environ["ORT_TENSORRT_INT8_ENABLE"] = "0"
+            self.extra_options.update({
+                "add_qdq_pair_to_weight": True,
+                "dedicated_qdq_pair": True,
+                "optypes_to_exclude_output_quant": ["Conv", "Gemm", "Add", "MatMul"],
+            })
+        else:
+            os.environ["ORT_TENSORRT_UNAVAILABLE"] = "1"
+ 
         BaseConfig.__init__(self, white_list=self.op_types_to_quantize)
         self.execution_provider = execution_provider
         self.quant_last_matmul = quant_last_matmul

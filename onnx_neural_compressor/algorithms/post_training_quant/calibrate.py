@@ -547,7 +547,7 @@ class ONNXRTAugment:
         model = self.model
 
         input_name_to_nodes = self.model_wrapper.input_name_to_nodes()
-        output_name_to_nodes = self.model_wrapper.output_name_to_node()
+        output_name_to_node = self.model_wrapper.output_name_to_node()
 
         for tensor_name in quantization_thresholds.keys():
             child = None
@@ -558,18 +558,20 @@ class ONNXRTAugment:
             parent = None
             sym = False
             qType = 2  # uint8
-            if tensor_name in output_name_to_nodes and \
-                output_name_to_nodes[tensor_name].name in q_config and \
-                q_config[output_name_to_nodes[tensor_name].name] not in ["fp32", "fp16", "bf16"]:
-                sym = q_config[output_name_to_nodes[tensor_name].name]["activation_sym"]
-                qType = q_config[output_name_to_nodes[tensor_name].name]["activation_type"]
-            elif tensor_name in input_name_to_nodes and \
+
+            # input and output tensor follow activation_type and activation_sym
+            if tensor_name in input_name_to_nodes and \
                 any([i.name in q_config for i in input_name_to_nodes[tensor_name]]):
                 for child in input_name_to_nodes[tensor_name]:
                     if child.name in q_config and q_config[child.name] not in ["fp32", "fp16", "bf16"]:
                         sym = q_config[child.name]["activation_sym"]
                         qType = q_config[child.name]["activation_type"]
                         break
+            elif tensor_name in output_name_to_node and \
+                output_name_to_node[tensor_name].name in q_config and \
+                q_config[output_name_to_node[tensor_name].name] not in ["fp32", "fp16", "bf16"]:
+                sym = q_config[output_name_to_node[tensor_name].name]["activation_sym"]
+                qType = q_config[output_name_to_node[tensor_name].name]["activation_type"]
             if self.execution_provider in ["TensorrtExecutionProvider"]:
                 # TensorrtExecutionProvider only support int8
                 qType = 3

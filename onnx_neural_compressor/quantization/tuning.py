@@ -16,9 +16,11 @@ import copy
 import os
 import pathlib
 import tempfile
+import traceback
 import uuid
 
 import onnx
+import onnxruntime as ort
 from onnx_neural_compressor import config
 from onnx_neural_compressor import data_reader
 from onnx_neural_compressor import logger
@@ -334,14 +336,6 @@ class TuningMonitor:
     def get_number_of_trials(self):
         return len(self.tuning_history)
 
-    def get_best_quant_config(self) -> config.BaseConfig:
-        assert self.get_number_of_trials() > 0, "No trial record in tuning monitor."
-        # Put the record with a higher score at the beginning
-        sorted_trials_records: List[_TrialRecord] = sorted(
-            self.tuning_history, key=lambda x: x.trial_result, reverse=True
-        )
-        return sorted_trials_records[0].quant_config
-
     def need_stop(self) -> bool:
         """Check if need to stop tuning. Either accuracy goal is met, max trials is reached or timeout is reached.
 
@@ -360,6 +354,11 @@ class TuningMonitor:
         # [-1] is the last element representing the latest trail record.
         return reach_max_trials or meet_accuracy_goal
 
+    def print_config_diff(self, config):
+        if len(self.tuning_history) == 0:
+            logger.info("quant config: {}".format(config))
+        else:
+            logger.info("quant config difference: {}".format(config.get_diff_dict(self.tuning_history[0].quant_config)))
 
 class TuningLogger:
     """A unified logger for the tuning/quantization process.
@@ -456,6 +455,7 @@ def autotune(
     eval_fn: Callable,
     eval_args: Optional[Tuple[Any]] = None,
     calibration_data_reader: data_reader.CalibrationDataReader = None,
+    optimization_level: ort.GraphOptimizationLevel = ort.GraphOptimizationLevel.ORT_ENABLE_BASIC,
 ) -> Union[None, onnx.ModelProto]:
     """The main entry of auto-tune.
 
@@ -470,18 +470,31 @@ def autotune(
             During evaluation, autotune will only pass model path as the input of function.
         eval_args (Optional[Tuple[Any]]): evaluate arguments.
             Positional arguments for `eval_fn`.
-
         calibration_data_reader (data_reader.CalibrationDataReader): dataloader for calibration.
+        optimization_level (onnxruntime.GraphOptimizationLevel): graph optimization level.
+            Support ORT_DISABLE_ALL, ORT_ENABLE_ALL, ORT_ENABLE_BASIC, ORT_ENABLE_EXTENDED. Default is ORT_ENABLE_BASIC.
+            Details: https://onnxruntime.ai/docs/performance/model-optimizations/graph-optimizations.html#onlineoffline-mode
     """
     best_quant_model = None
     eval_func_wrapper = EvaluationFuncWrapper(eval_fn, eval_args)
     config_loader, tuning_logger, tuning_monitor = init_tuning(tuning_config=tune_config)
+    opt_tmp_file = tempfile.TemporaryDirectory()
+    if optimization_level != ort.GraphOptimizationLevel.ORT_DISABLE_ALL:
+        sess_options = ort.SessionOptions()
+        sess_options.graph_optimization_level = optimization_level
+        sess_options.optimized_model_filepath = pathlib.Path(opt_tmp_file.name).joinpath("opt.onnx").as_posix()
+        session = ort.InferenceSession(model_input, sess_options)
+        model_input = sess_options.optimized_model_filepath
+        del session
+
     try:
         baseline: float = eval_func_wrapper.evaluate(model_input)
     except Exception as e:
-        print(e)
         if "'str' object has no attribute 'SerializeToString'" in str(e):
             logger.warning("Please refine your eval_fn to accept model path (str) as input.")
+        if "Unable to load from type '<class 'onnx.onnx_ml_pb2.ModelProto'>'" in str(e):
+            logger.warning("Please pass model path to autotune API rather than onnx.ModelProto.")
+        print(traceback.format_exc())
         exit(0)
     tuning_monitor.set_baseline(baseline)
     tuning_logger.tuning_start()
@@ -490,7 +503,7 @@ def autotune(
             calibration_data_reader.rewind()
         tuning_logger.trial_start(trial_index=trial_index)
         tuning_logger.quantization_start()
-        logger.debug("quant config: {}".format(quant_config))
+        tuning_monitor.print_config_diff(quant_config)
         q_model = _quantize(model_input, quant_config=quant_config, calibration_data_reader=calibration_data_reader)
         tuning_logger.quantization_end()
         tuning_logger.evaluation_start()
@@ -523,10 +536,14 @@ def autotune(
         tuning_monitor.add_trial_result(trial_index, eval_result, quant_config)
         tuning_logger.trial_end(trial_index)
         if tuning_monitor.need_stop():
-            best_quant_config: config.BaseConfig = tuning_monitor.get_best_quant_config()
-            best_quant_model = _quantize(
-                model_input, quant_config=best_quant_config, calibration_data_reader=calibration_data_reader
-            )
+            best_quant_model = q_model
             break
+
     tuning_logger.tuning_end()
+    if best_quant_model is None:
+        logger.info("Don't find the quantized model which meets accuracy requirement. "
+            "Please try other configs or adjust tolerable_loss.")
+        exit(0)
+
+    opt_tmp_file.cleanup()
     return best_quant_model

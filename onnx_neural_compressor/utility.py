@@ -447,19 +447,32 @@ def static_cpu_check(config, optype, execution_provider, quant_format):
 
     # only support per-tensor
     if optype in ["EmbedLayerNormalization", "Relu", "Clip", "LeakyRelu", "Sigmoid", "MaxPool", "GlobalAveragePool",
-                    "Pad", "Split", "Squeeze", "Reshape", "Concat", "AveragePool", "Tile", 
+                    "Pad", "Split", "Squeeze", "Reshape", "Concat", "AveragePool", "Tile",
                     "Unsqueeze", "Transpose", "Resize", "Abs", "Shrink", "Sign", "Attention",
                     "Flatten", "Expand", "Slice", "Mod", "ReduceMax", "ReduceMin",
                     "CenterCropPad", "Add", "Mul", "ArgMax"]:
         setattr(config, "per_channel", False)
+
+    if optype in ["Attention"]:
+        setattr(config, "activation_type", onnx.TensorProto.UINT8)
     return config
 
 def static_cuda_check(config, optype, execution_provider, quant_format):
     if execution_provider != "CUDAExecutionProvider":
         return config
 
-    # current configurations are same as CPU EP
-    return static_cpu_check(config, optype, execution_provider, quant_format)
+    # only support per-tensor
+    if optype in ["EmbedLayerNormalization", "Relu", "Clip", "LeakyRelu", "Sigmoid", "MaxPool", "GlobalAveragePool",
+                    "Pad", "Split", "Squeeze", "Reshape", "Concat", "AveragePool", "Tile",
+                    "Unsqueeze", "Transpose", "Resize", "Abs", "Shrink", "Sign", "Attention",
+                    "Flatten", "Expand", "Slice", "Mod", "ReduceMax", "ReduceMin",
+                    "CenterCropPad", "Add", "Mul", "ArgMax"]:
+        setattr(config, "per_channel", False)
+
+    if optypein ["Attention"]:
+        setattr(config, "activation_type", onnx.TensorProto.INT8)
+        setattr(config, "weight_type", onnx.TensorProto.INT8)
+    return config
 
 def static_dml_check(config, optype, execution_provider, quant_format):
     if execution_provider != "DmlExecutionProvider":

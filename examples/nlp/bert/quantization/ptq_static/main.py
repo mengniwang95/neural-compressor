@@ -17,6 +17,8 @@
 # pylint:disable=redefined-outer-name,logging-format-interpolation
 
 import logging
+import pathlib
+import tempfile
 import argparse
 import dataclasses
 import os
@@ -30,6 +32,7 @@ from typing import List, Optional, Union
 from torch.utils import data
 from onnx_neural_compressor import config
 from onnx_neural_compressor import quantization
+from onnx_neural_compressor.quantization import tuning
 from onnxruntime.transformers import optimizer
 from onnxruntime.transformers.fusion_options import FusionOptions
 
@@ -351,7 +354,6 @@ class ONNXRTGLUE:
     def result(self):
         """calculate metric"""
         output_mode = transformers.glue_output_modes[self.task]
-
         if output_mode == "classification":
             processed_preds = np.argmax(self.pred_list, axis=1)
         elif output_mode == "regression":
@@ -405,45 +407,45 @@ if __name__ == "__main__":
     # set config for npu test
     provider = "DmlExecutionProvider" if args.device == "npu" else "CPUExecutionProvider"
 
+    dataset = ONNXRTBertDataset(args.model_path,
+        data_dir=args.data_path,
+        model_name_or_path=args.model_name_or_path,
+        max_seq_length=args.max_seq_length,
+        task=args.task,
+        model_type=args.model_type,
+        dynamic_length=args.dynamic_length)
+    dataloader = data.DataLoader(
+        dataset,
+        sampler=data.SequentialSampler(dataset),
+        batch_size=args.batch_size,
+        shuffle=False,
+    )
+
+    def eval_func(model):
+        metric = ONNXRTGLUE(args.task)
+        session = onnxruntime.InferenceSession(model, providers=[provider])
+        ort_inputs = {}
+        len_inputs = len(session.get_inputs())
+        inputs_names = [session.get_inputs()[i].name for i in range(len_inputs)]
+
+        batch_seq_length = args.max_seq_length if not args.dynamic_length else torch.max(batch[-2], 0)[0].item()
+
+        for idx, batch in enumerate(dataloader):
+            label = batch[-1]
+            batch = tuple(t.detach().cpu().numpy() if not isinstance(t, np.ndarray) else t for t in batch[0])
+            inputs = [
+                batch[0][:, :batch_seq_length],
+                batch[1][:, :batch_seq_length],
+                batch[2][:, :batch_seq_length],
+            ]
+            for i in range(len_inputs):
+                ort_inputs.update({inputs_names[i]: inputs[i]})
+            predictions = session.run(None, ort_inputs)
+            metric.update(predictions[0], label)
+        return metric.result()
+
     if args.benchmark:
         model = onnx.load(args.model_path)
-        dataset = ONNXRTBertDataset(args.model_path,
-            data_dir=args.data_path,
-            model_name_or_path=args.model_name_or_path,
-            max_seq_length=args.max_seq_length,
-            task=args.task,
-            model_type=args.model_type,
-            dynamic_length=args.dynamic_length)
-        dataloader = data.DataLoader(
-            dataset,
-            sampler=data.SequentialSampler(dataset),
-            batch_size=self.batch_size,
-            shuffle=False,
-        )
-
-        def eval_func(model):
-            metric = ONNXRTGLUE(args.task)
-            session = onnxruntime.InferenceSession(model.SerializeToString(), providers=[provider])
-            ort_inputs = {}
-            len_inputs = len(session.get_inputs())
-            inputs_names = [session.get_inputs()[i].name for i in range(len_inputs)]
-
-            batch_seq_length = args.max_seq_length if not args.dynamic_length else torch.max(batch[-2], 0)[0].item()
-
-            for idx, batch in enumerate(dataloader):
-                batch = tuple(t.detach().cpu().numpy() if not isinstance(t, np.ndarray) else t for t in batch)
-                inputs = [
-                    batch[0][:, :batch_seq_length],
-                    batch[1][:, :batch_seq_length],
-                    batch[2][:, :batch_seq_length],
-                ]
-                label = batch[-1]
-                for i in range(len_inputs):
-                    ort_inputs.update({inputs_names[i]: inputs[i]})
-                predictions = session.run(None, ort_inputs)
-                metric.update(predictions[0], labels)
-            return metric.result()
-
         if args.mode == 'performance':
             total_time = 0.0
             num_iter = 100
@@ -486,32 +488,43 @@ if __name__ == "__main__":
 
     if args.tune:
         # optimize model
-        opt_options = FusionOptions("bert")
-        opt_options.enable_embed_layer_norm = False
+        with tempfile.TemporaryDirectory(prefix="ort.opt.") as tmp_dir:
+            opt_options = FusionOptions("bert")
+            opt_options.enable_embed_layer_norm = False
 
-        model_optimizer = optimizer.optimize_model(
-            args.model_path,
-            "bert",
-            num_heads=12,
-            hidden_size=768,
-            optimization_options=opt_options)
-        model = model_optimizer.model
-        
-        # check the optimized model is valid
-        try:
-            onnxruntime.InferenceSession(model.SerializeToString(), providers=onnxruntime.get_available_providers())
-        except Exception as e:
-            logger.warning("Optimized model is invalid: {}. ".format(e))
-            logger.warning("Model optimizer will be skipped. " \
-                           "Try to upgrade onnxruntime to avoid this error")
-            model = onnx.load(args.model_path)
+            model_optimizer = optimizer.optimize_model(
+                args.model_path,
+                "bert",
+                num_heads=12,
+                hidden_size=768,
+                optimization_options=opt_options)
+            model = model_optimizer.model
 
-        calibration_data_reader = DataReader(args.model_path, calibration_sampling_size=8)
-        config = config.StaticQuantConfig(
-            calibration_data_reader=calibration_data_reader,
-            quant_format=quantization.QuantFormat.QOperator if args.quant_format == "QOperator" else quantization.QuantFormat.QDQ,
-            calibration_sampling_size=8,
-            extra_options={"optypes_to_exclude_output_quant": ["MatMul", "Gemm", "Attention", "FusedGemm"]},
-            execution_provider=provider,
-        )
-        quantization.quantize(model, args.output_model, config)
+            # check the optimized model is valid
+            try:
+                onnxruntime.InferenceSession(model.SerializeToString(), providers=onnxruntime.get_available_providers())
+                onnx.save(model, pathlib.Path(tmp_dir).joinpath("opt.onnx").as_posix())
+                model = pathlib.Path(tmp_dir).joinpath("opt.onnx").as_posix()
+            except Exception as e:
+                logger.warning("Optimized model is invalid: {}. ".format(e))
+                logger.warning("Model optimizer will be skipped. " \
+                               "Try to upgrade onnxruntime to avoid this error")
+                model = args.model_path
+
+            calibration_data_reader = DataReader(args.model_path, calibration_sampling_size=8)
+            custom_tune_config = tuning.TuningConfig(
+                config_set=config.StaticQuantConfig.get_config_set_for_tuning(
+                    quant_format=quantization.QuantFormat.QOperator if args.quant_format == "QOperator" else quantization.QuantFormat.QDQ,
+                    calibration_sampling_size=8,
+                    extra_options={"optypes_to_exclude_output_quant": ["MatMul", "Gemm", "Attention", "FusedGemm"]},
+                    execution_provider=provider,
+                )
+            )
+            best_model = tuning.autotune(
+                model_input=model,
+                tune_config=custom_tune_config,
+                eval_fn=eval_func,
+                calibration_data_reader=calibration_data_reader,
+                optimization_level=onnxruntime.GraphOptimizationLevel.ORT_DISABLE_ALL,
+            )
+            onnx.save(best_model, args.output_model)

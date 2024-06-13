@@ -32,7 +32,7 @@ class AttentionOperator(base_op.Operator):
     def quantize(self):
         """Do quantizaion."""
         node = self.node
-        self.quantizer.quantize_inputs(node, [0, 1, 2])
+        self.quantizer.quantize_inputs(node, [0, 1])
         node.name = node.name + "_quant"
 
     def convert(self):

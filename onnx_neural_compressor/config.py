@@ -207,6 +207,7 @@ class BaseConfig(ABC):
 
     name = constants.BASE_CONFIG
     params_list: List[Union[str, TuningParam]] = []
+    model_params_list: List[Union[str, TuningParam]] = []
 
     def __init__(
         self,
@@ -321,10 +322,18 @@ class BaseConfig(ABC):
                     config.set_local(op_name, cls(**op_config))
             return config
 
-    @classmethod
-    def to_diff_dict(cls, instance) -> Dict[str, Any]:
-        # TODO
-        return {}
+    def get_diff_dict(self, config) -> Dict[str, Any]:
+        """Get the difference between current config and user-specific config."""
+        diff_cfg = {}
+        for name, cfg in self.get_init_args().items():
+            if hasattr(config, name):
+                if isinstance(cfg, BaseConfig) and isinstance(config[name], BaseConfig):
+                    diff_cfg[name] = cfg.get_diff_dict(config[name])
+                elif cfg != config[name]:
+                    diff_cfg[name] = cfg
+            else:
+                diff_cfg[name] = cfg
+        return diff_cfg
 
     @classmethod
     def from_json_file(cls, filename):
@@ -449,7 +458,7 @@ class BaseConfig(ABC):
                 new_config = copy.deepcopy(self)
                 for param_name, param_value in zip(tuning_param_name_lst, params_values):
                     setattr(new_config, param_name, param_value)
-                logger.info(new_config.to_dict())
+                logger.debug(new_config.to_dict())
                 model_level_config_lst.append(new_config)
 
         # set op level params
@@ -480,7 +489,7 @@ class BaseConfig(ABC):
                         for _, cfg in new_config.local_config.items():
                             if isinstance(getattr(cfg, name, None), list) and val in getattr(cfg, name, None):
                                 setattr(cfg, name, val)
-                    logger.info(new_config.to_dict())
+                    logger.debug(new_config.to_dict())
                     local_op_level_config_lst.append(new_config)
 
         logger.info("Expanded the %s and got %d configs.", self.__class__.name, len(local_op_level_config_lst))
@@ -1339,6 +1348,7 @@ class StaticQuantConfig(BaseConfig, quantization.StaticQuantConfig):
             # update node level setting
             global_config = config.global_config
             op_type_config_dict, op_name_config_dict = config._get_op_name_op_type_config()
+            last_matmul = None
             for op_name, op_type in model_info:
                 if isinstance(self.op_types_to_quantize, list) and len(self.op_types_to_quantize) > 0 and op_type not in self.op_types_to_quantize:
                     continue
@@ -1348,9 +1358,14 @@ class StaticQuantConfig(BaseConfig, quantization.StaticQuantConfig):
                     continue
                 if op_type in op_type_config_dict:
                     config_mapping[op_name] = op_type_config_dict[op_type]
+                    if op_type == "MatMul":
+                        last_matmul = op_name
                 for op_name_pattern in op_name_config_dict:
                     if re.match(op_name_pattern, op_name):
                         config_mapping[op_name] = op_name_config_dict[op_name_pattern]
+
+        if not self.quant_last_matmul and last_matmul is not None and last_matmul in config_mapping:
+            del config_mapping[last_matmul]
         return config_mapping
 
     @classmethod
@@ -1364,24 +1379,38 @@ class StaticQuantConfig(BaseConfig, quantization.StaticQuantConfig):
         use_external_data_format=False,
         calibration_sampling_size=100,
         quant_last_matmul=True,
+        **kwargs,
     ) -> Union[None, "StaticQuantConfig", List["StaticQuantConfig"]]:  # pragma: no cover
         if execution_provider is None:
             execution_provider = utility.auto_detect_ep()
         StaticQuantConfig.register_supported_configs()
         if op_types_to_quantize is None:
             op_types_to_quantize = constants.STATIC_QOPERATOR_OP_LIST_MAP.get(execution_provider, []) if quant_format == quantization.QuantFormat.QOperator else constants.STATIC_QDQ_OP_LIST_MAP.get(execution_provider, [])
-        cfg = StaticQuantConfig(
-            execution_provider=execution_provider,
-            quant_format=quant_format,
-            reduce_range=reduce_range,
-            use_external_data_format=use_external_data_format,
-            calibration_sampling_size=calibration_sampling_size,
-            op_types_to_quantize=op_types_to_quantize,
-            nodes_to_exclude=nodes_to_exclude,
-            quant_last_matmul=[True, False],
-            per_channel=[True, False],
-        )
-        return cfg
+
+        op_type_candidate = [
+            op_types_to_quantize,
+            list(set(op_types_to_quantize).difference({"Add", "Mul"})),
+            list(set(op_types_to_quantize).difference({"Add", "Mul", "Gather", "GatherElements", "GatherND"})),
+            list(set(op_types_to_quantize).difference({"Add", "Mul", "Gather", "GatherElements", "GatherND", "Attention"})),
+        ]
+
+        cfg_lst = []
+        for item in op_type_candidate:
+            cfg_lst.append(
+                StaticQuantConfig(
+                    execution_provider=execution_provider,
+                    quant_format=quant_format,
+                    reduce_range=reduce_range,
+                    use_external_data_format=use_external_data_format,
+                    calibration_sampling_size=calibration_sampling_size,
+                    op_types_to_quantize=item,
+                    nodes_to_exclude=nodes_to_exclude,
+                    quant_last_matmul=[True, False],
+                    per_channel=[True, False],
+                    **kwargs,
+                )
+            )
+        return cfg_lst
 
     @classmethod
     def register_supported_configs(cls) -> None:
@@ -1674,6 +1703,7 @@ class DynamicQuantConfig(BaseConfig, quantization.DynamicQuantConfig):
             # update node level setting
             global_config = config.global_config
             op_type_config_dict, op_name_config_dict = config._get_op_name_op_type_config()
+            last_matmul = None
             for op_name, op_type in model_info:
                 if isinstance(self.op_types_to_quantize, list) and len(self.op_types_to_quantize) > 0 and op_type not in self.op_types_to_quantize:
                     continue
@@ -1683,9 +1713,14 @@ class DynamicQuantConfig(BaseConfig, quantization.DynamicQuantConfig):
                     continue
                 if op_type in op_type_config_dict:
                     config_mapping[op_name] = op_type_config_dict[op_type]
+                    if op_type == "MatMul":
+                        last_matmul = op_name
                 for op_name_pattern in op_name_config_dict:
                     if re.match(op_name_pattern, op_name):
                         config_mapping[op_name] = op_name_config_dict[op_name_pattern]
+
+        if not self.quant_last_matmul and last_matmul is not None and last_matmul in config_mapping:
+            del config_mapping[last_matmul]
         return config_mapping
 
     @classmethod
@@ -1702,17 +1737,29 @@ class DynamicQuantConfig(BaseConfig, quantization.DynamicQuantConfig):
             execution_provider = utility.auto_detect_ep()
         if op_types_to_quantize is None:
             op_types_to_quantize = constants.DYNAMIC_OP_LIST_MAP.get(execution_provider, [])
-        # DynamicQuantConfig.register_supported_configs()
-        cfg = DynamicQuantConfig(
-            execution_provider=execution_provider,
-            op_types_to_quantize=op_types_to_quantize,
-            nodes_to_exclude=nodes_to_exclude,
-            reduce_range=reduce_range,
-            use_external_data_format=use_external_data_format,
-            quant_last_matmul=[True, False],
-            per_channel=[True, False],
-        )
-        return cfg
+
+        op_type_candidate = [
+            op_types_to_quantize,
+            list(set(op_types_to_quantize).difference({"EmbedLayerNormalization", "Gather", "LSTM"})),
+            list(set(op_types_to_quantize).difference({"EmbedLayerNormalization", "Gather", "LSTM", "Conv", "FusedConv"})),
+            list(set(op_types_to_quantize).difference({"EmbedLayerNormalization", "Gather", "LSTM", "Conv", "FusedConv", "Attention"})),
+            list(set(op_types_to_quantize).difference({"EmbedLayerNormalization", "Gather", "LSTM", "Conv", "FusedConv", "MatMul"})),
+        ]
+
+        cfg_lst = []
+        for item in op_type_candidate:
+            cfg_lst.append(
+                DynamicQuantConfig(
+                    execution_provider=execution_provider,
+                    op_types_to_quantize=item,
+                    nodes_to_exclude=nodes_to_exclude,
+                    reduce_range=reduce_range,
+                    use_external_data_format=use_external_data_format,
+                    quant_last_matmul=[True, False],
+                    per_channel=[True, False],
+                )
+            )
+        return cfg_lst
 
     @classmethod
     def register_supported_configs(cls) -> None:

@@ -385,24 +385,6 @@ def register_algo(name):
 
     return decorator
 
-
-def get_model_info(
-    model: Union[onnx.ModelProto, pathlib.Path, str], white_op_type_list: List[Callable]
-) -> List[Tuple[str, Callable]]:
-    if not isinstance(model, onnx.ModelProto):
-        model = onnx.load(model)
-    filter_result = []
-    filter_result_set = set()
-    for node in model.graph.node:
-        if node.op_type in white_op_type_list:
-            pair = (node.name, node.op_type)
-            if pair not in filter_result_set:
-                filter_result_set.add(pair)
-                filter_result.append(pair)
-    logger.debug(f"Get model info: {filter_result}")
-    return filter_result
-
-
 def check_model_with_infer_shapes(model):
     """Check if the model has been shape inferred."""
     if isinstance(model, (pathlib.Path, str)):
@@ -469,7 +451,7 @@ def static_cuda_check(config, optype, execution_provider, quant_format):
                     "CenterCropPad", "Add", "Mul", "ArgMax"]:
         setattr(config, "per_channel", False)
 
-    if optypein ["Attention"]:
+    if optype in ["Attention"]:
         setattr(config, "activation_type", onnx.TensorProto.INT8)
         setattr(config, "weight_type", onnx.TensorProto.INT8)
     return config

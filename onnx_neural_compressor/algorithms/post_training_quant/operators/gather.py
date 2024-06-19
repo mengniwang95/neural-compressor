@@ -74,7 +74,7 @@ class GatherOperator(base_op.Operator):
             for attribute in node.attribute:  # pragma: no cover
                 kwargs.update(quant_utils.attribute_to_kwarg(attribute))
 
-            gather_node = onnx.helper.make_node("Gather", inputs, [gather_new_output], node.name, **kwargs)
+            gather_node = onnx.helper.make_node(node.op_type, inputs, [gather_new_output], node.name, **kwargs)
             self.quantizer.new_nodes.append(gather_node)
             if any([i.op_type != "QuantizeLinear" for i in children]):  # pragma: no cover
                 dq_inputs = []

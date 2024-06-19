@@ -631,13 +631,13 @@ class TestQuantizer(unittest.TestCase):
 
         q_model = self.qlinear_test(model, q_config, quantize_params, quantizable_op_types)
         self.assertEqual(collections.Counter([node.op_type for node in q_model.model.graph.node])["QAttention"], 1)
-        self.assertEqual(collections.Counter([node.op_type for node in q_model.model.graph.node])["QuantizeLinear"], 3)
-        self.assertEqual(collections.Counter([node.op_type for node in q_model.model.graph.node])["DequantizeLinear"], 1)
+        self.assertEqual(collections.Counter([node.op_type for node in q_model.model.graph.node])["QuantizeLinear"], 2)
+        self.assertEqual(collections.Counter([node.op_type for node in q_model.model.graph.node])["DequantizeLinear"], 0)
 
         self.qdq_test(model, q_config, quantize_params, quantizable_op_types)
         q_config = {"Attention": self.q_config}
         q_model = self.dynamic_test(model, q_config, quantize_params, quantizable_op_types)
-        self.assertEqual(collections.Counter([node.op_type for node in q_model.model.graph.node])["DynamicQuantizeLinear"], 3)
+        self.assertEqual(collections.Counter([node.op_type for node in q_model.model.graph.node])["DynamicQuantizeLinear"], 2)
 
         E = onnx.helper.make_tensor_value_info("E", onnx.TensorProto.INT32, [1, 1, 5, 5])
         F = onnx.helper.make_tensor_value_info("F", onnx.TensorProto.FLOAT, [1, 1, 5, 5])
@@ -654,16 +654,16 @@ class TestQuantizer(unittest.TestCase):
         quantizable_op_types = ["Attention"]
 
         q_model = self.qlinear_test(model, q_config, quantize_params, quantizable_op_types)
-        self.assertEqual(collections.Counter([node.op_type for node in q_model.model.graph.node])["QuantizeLinear"], 3)
-        self.assertEqual(collections.Counter([node.op_type for node in q_model.model.graph.node])["DequantizeLinear"], 1)
+        self.assertEqual(collections.Counter([node.op_type for node in q_model.model.graph.node])["QuantizeLinear"], 2)
+        self.assertEqual(collections.Counter([node.op_type for node in q_model.model.graph.node])["DequantizeLinear"], 0)
 
         q_model = self.qdq_test(model, q_config, quantize_params, quantizable_op_types)
-        self.assertEqual(collections.Counter([node.op_type for node in q_model.model.graph.node])["QuantizeLinear"], 3)
-        self.assertEqual(collections.Counter([node.op_type for node in q_model.model.graph.node])["DequantizeLinear"], 3)
+        self.assertEqual(collections.Counter([node.op_type for node in q_model.model.graph.node])["QuantizeLinear"], 2)
+        self.assertEqual(collections.Counter([node.op_type for node in q_model.model.graph.node])["DequantizeLinear"], 2)
 
         q_config = {"Attention": self.q_config}
         q_model = self.dynamic_test(model, q_config, quantize_params, quantizable_op_types)
-        self.assertEqual(collections.Counter([node.op_type for node in q_model.model.graph.node])["DynamicQuantizeLinear"], 3)
+        self.assertEqual(collections.Counter([node.op_type for node in q_model.model.graph.node])["DynamicQuantizeLinear"], 2)
 
     def test_gather(self):
         input_tensor = onnx.helper.make_tensor_value_info("input", onnx.TensorProto.FLOAT, [3, 2])

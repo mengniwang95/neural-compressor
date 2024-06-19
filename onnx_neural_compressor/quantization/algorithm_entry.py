@@ -39,12 +39,15 @@ def rtn_quantize_entry(
     model: Union[pathlib.Path, str], quant_config: config.RTNConfig, *args, **kwargs
 ) -> onnx.ModelProto:
     """The main entry to apply rtn quantization."""
-    # map config to each op
-    model_info = quant_config.get_model_info(model=model)
-    configs_mapping = quant_config.to_config_mapping(model_info=model_info)
-    logger.debug(configs_mapping)
-    model = rtn.apply_rtn_on_model(model, configs_mapping)
-    quant_utils.dump_woq_stats(model, configs_mapping, list(set([i[1] for i in model_info])))
+    if len(quant_config.config_mapping) == 0:
+        # map config to each op
+        model_info = config.RTNConfig.get_model_info(model=model)
+        config_mapping = quant_config.to_config_mapping(model_info=model_info)
+        logger.debug(config_mapping)
+    else:
+        config_mapping = quant_config.config_mapping
+    model = rtn.apply_rtn_on_model(model, config_mapping)
+    quant_utils.dump_woq_stats(model, config_mapping, quant_config.white_list)
     return model
 
 
@@ -63,15 +66,18 @@ def gptq_quantize_entry(
         calibration_data_reader, data_reader.CalibrationDataReader
     ), "Please follow onnx_neural_compressor/data_reader.py to implement calibration_data_reader"
 
-    # map config to each op
-    model_info = quant_config.get_model_info(model=model)
-    configs_mapping = quant_config.to_config_mapping(model_info=model_info)
-    logger.debug(configs_mapping)
+    if len(quant_config.config_mapping) == 0:
+        # map config to each op
+        model_info = config.GPTQConfig.get_model_info(model=model)
+        config_mapping = quant_config.to_config_mapping(model_info=model_info)
+        logger.debug(config_mapping)
+    else:
+        config_mapping = quant_config.config_mapping
 
     # regenerate to ensure data exists
     calibration_data_reader.rewind()
-    model = gptq.apply_gptq_on_model(model, configs_mapping, calibration_data_reader)
-    quant_utils.dump_woq_stats(model, configs_mapping, list(set([i[1] for i in model_info])))
+    model = gptq.apply_gptq_on_model(model, config_mapping, calibration_data_reader)
+    quant_utils.dump_woq_stats(model, config_mapping, quant_config.white_list)
     return model
 
 
@@ -90,15 +96,18 @@ def awq_quantize_entry(
         calibration_data_reader, data_reader.CalibrationDataReader
     ), "Please follow onnx_neural_compressor/data_reader.py to implement calibration_data_reader"
 
-    # map config to each op
-    model_info = quant_config.get_model_info(model=model)
-    configs_mapping = quant_config.to_config_mapping(model_info=model_info)
-    logger.debug(configs_mapping)
+    if len(quant_config.config_mapping) == 0:
+        # map config to each op
+        model_info = config.AWQConfig.get_model_info(model=model)
+        config_mapping = quant_config.to_config_mapping(model_info=model_info)
+        logger.debug(config_mapping)
+    else:
+        config_mapping = quant_config.config_mapping
 
     # regenerate to ensure data exists
     calibration_data_reader.rewind()
-    model = awq.apply_awq_on_model(model, configs_mapping, calibration_data_reader)
-    quant_utils.dump_woq_stats(model, configs_mapping, list(set([i[1] for i in model_info])))
+    model = awq.apply_awq_on_model(model, config_mapping, calibration_data_reader)
+    quant_utils.dump_woq_stats(model, config_mapping, quant_config.white_list)
     return model
 
 ###################### Static quant Entry ##################################
@@ -120,10 +129,13 @@ def static_quantize_entry(
         calibration_data_reader, data_reader.CalibrationDataReader
     ), "Please follow onnx_neural_compressor/quantization/calibrate.py to implement calibration_data_reader"
 
-    # map config to each op
-    model_info = config.StaticQuantConfig.get_model_info(model=model)
-    configs_mapping = quant_config.to_config_mapping(model_info=model_info)
-    logger.debug(configs_mapping)
+    if len(quant_config.config_mapping) == 0:
+        # map config to each op
+        model_info = config.StaticQuantConfig.get_model_info(model=model)
+        config_mapping = quant_config.to_config_mapping(model_info=model_info)
+        logger.debug(config_mapping)
+    else:
+        config_mapping = quant_config.config_mapping
 
     calibration_data_reader.rewind()
     augment = calibrate.ONNXRTAugment(
@@ -133,11 +145,11 @@ def static_quantize_entry(
         execution_provider=quant_config.execution_provider,
         iterations=list(range(0, quant_config.calibration_sampling_size)),
     )
-    min_max = augment.dump_minmax(configs_mapping)
-    quantize_params = augment.dump_calibration(configs_mapping, min_max=min_max)
+    min_max = augment.dump_minmax(config_mapping)
+    quantize_params = augment.dump_calibration(config_mapping, min_max=min_max)
     _quantizer = quantizer.StaticQuantizer(
         model,
-        configs_mapping,
+        config_mapping,
         quant_format=quant_config.quant_format.name.lower(),
         quantization_params=quantize_params,
         op_types_to_quantize=quant_config.op_types_to_quantize,
@@ -147,7 +159,7 @@ def static_quantize_entry(
     _quantizer.quantize_model()
     if model_output is not None:
         _quantizer.model.save(model_output)
-    quant_utils.dump_model_op_stats(_quantizer.model.model, configs_mapping, quant_config.op_types_to_quantize)
+    quant_utils.dump_model_op_stats(_quantizer.model.model, config_mapping, quant_config.op_types_to_quantize)
     return _quantizer.model.model
 
 
@@ -200,7 +212,6 @@ def smooth_quant_entry(
             calibration_data_reader,
             model_output or pathlib.Path(tmp_dir).joinpath("quant_model.onnx").as_posix(),
         )
-
     return q_model
 
 
@@ -217,18 +228,22 @@ def dynamic_quantize_entry(
     if len(quant_config.op_types_to_quantize) == 0:
         logger.warning("No candidate op type to do quantization, exit.")
         exit(0)
-    # map config to each op
-    model_info = quant_config.get_model_info(model=model)
-    configs_mapping = quant_config.to_config_mapping(model_info=model_info)
-    logger.debug(configs_mapping)
+
+    if len(quant_config.config_mapping) == 0:
+        # map config to each op
+        model_info = config.DynamicQuantConfig.get_model_info(model=model)
+        config_mapping = quant_config.to_config_mapping(model_info=model_info)
+        logger.debug(config_mapping)
+    else:
+        config_mapping = quant_config.config_mapping
 
     _quantizer = quantizer.DynamicQuantizer(
         model,
-        configs_mapping,
+        config_mapping,
         op_types_to_quantize=quant_config.op_types_to_quantize,
         )
     _quantizer.quantize_model()
     if model_output is not None:
         _quantizer.model.save(model_output)
-    quant_utils.dump_model_op_stats(_quantizer.model.model, configs_mapping, quant_config.op_types_to_quantize)
+    quant_utils.dump_model_op_stats(_quantizer.model.model, config_mapping, quant_config.op_types_to_quantize)
     return _quantizer.model.model

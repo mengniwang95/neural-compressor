@@ -87,7 +87,7 @@ class TestONNXRT3xAutoTune(unittest.TestCase):
     def tearDownClass(self):
         shutil.rmtree("./gptj", ignore_errors=True)
 
-    @mock.patch("logging.Logger.warning")
+    @mock.patch("onnx_neural_compressor.logger.warning")
     def test_auto_tune_warning(self, mock_warning):
         acc_data = iter([1.0, 0.8, 0.99, 1.0, 0.99, 0.99])
 
@@ -158,16 +158,20 @@ class TestONNXRT3xAutoTune(unittest.TestCase):
         self.assertIsNotNone(best_model)
 
     def test_rtn_auto_tune(self):
-        acc_data = iter([1.0, 0.8, 0.6, 1.0, 0.99, 0.9])
+        eval_acc_fn = functools.partial(fake_eval, eval_result_lst=[1.0, 0.8, 0.9])
+        with self.assertRaises(SystemExit):
+            custom_tune_config = tuning.TuningConfig(
+                config_set=[config.RTNConfig(weight_group_size=32), config.RTNConfig(weight_group_size=64)]
+            )
+            best_model = tuning.autotune(
+                model_input=self.gptj,
+                tune_config=custom_tune_config,
+                eval_fn=eval_acc_fn,
+                calibration_data_reader=self.data_reader,
+            )
 
-        def eval_acc_fn(model) -> float:
-            return next(acc_data)
-
-        perf_data = iter([1.0, 0.99, 0.99])
-
-        def eval_perf_fn(model) -> float:
-            return next(perf_data)
-
+        eval_perf_fn = functools.partial(fake_eval, eval_result_lst=[1.0, 0.99, 0.99])
+        eval_acc_fn = functools.partial(fake_eval, eval_result_lst=[1.0, 0.8, 0.99])
         eval_fns = [
             {"eval_fn": eval_acc_fn, "weight": 0.5, "name": "accuracy"},
             {
@@ -175,23 +179,11 @@ class TestONNXRT3xAutoTune(unittest.TestCase):
                 "weight": 0.5,
             },
         ]
-
         evaluator = _create_evaluator_for_eval_fns(eval_fns)
 
         def eval_fn_wrapper(model):
             result = evaluator.evaluate(model)
             return result
-
-        custom_tune_config = tuning.TuningConfig(
-            config_set=[config.RTNConfig(weight_group_size=32), config.RTNConfig(weight_group_size=64)]
-        )
-        best_model = tuning.autotune(
-            model_input=self.gptj,
-            tune_config=custom_tune_config,
-            eval_fn=eval_acc_fn,
-            calibration_data_reader=self.data_reader,
-        )
-        self.assertIsNone(best_model)
 
         custom_tune_config = tuning.TuningConfig(config_set=[config.RTNConfig(weight_group_size=[32, 64])])
         best_model = tuning.autotune(
@@ -200,26 +192,32 @@ class TestONNXRT3xAutoTune(unittest.TestCase):
             eval_fn=eval_fn_wrapper,
             calibration_data_reader=self.data_reader,
         )
+
         self.assertEqual(len(evaluator.eval_fn_registry), 2)
         self.assertIsNotNone(best_model)
+
         op_names = [
             i.name
             for i in best_model.graph.node
-            if i.op_type.startswith("MatMul") and i.input[1].endswith("_Q{}G{}".format(4, 32))
+            if i.op_type.startswith("MatMul") and i.input[1].endswith("_Q{}G{}".format(4, 64))
         ]
         self.assertTrue(len(op_names) > 0)
 
     def test_awq_auto_tune(self):
-        acc_data = iter([1.0, 0.8, 0.6, 1.0, 0.99, 0.9])
+        eval_acc_fn = functools.partial(fake_eval, eval_result_lst=[1.0, 0.8, 0.9])
+        with self.assertRaises(SystemExit):
+            custom_tune_config = tuning.TuningConfig(
+                config_set=[config.AWQConfig(weight_group_size=32), config.AWQConfig(weight_group_size=64)]
+            )
+            best_model = tuning.autotune(
+                model_input=self.gptj,
+                tune_config=custom_tune_config,
+                eval_fn=eval_acc_fn,
+                calibration_data_reader=self.data_reader,
+            )
 
-        def eval_acc_fn(model) -> float:
-            return next(acc_data)
-
-        perf_data = iter([1.0, 0.99, 0.99])
-
-        def eval_perf_fn(model) -> float:
-            return next(perf_data)
-
+        eval_perf_fn = functools.partial(fake_eval, eval_result_lst=[1.0, 0.99, 0.99])
+        eval_acc_fn = functools.partial(fake_eval, eval_result_lst=[1.0, 0.99, 0.99])
         eval_fns = [
             {"eval_fn": eval_acc_fn, "weight": 0.5, "name": "accuracy"},
             {
@@ -227,23 +225,11 @@ class TestONNXRT3xAutoTune(unittest.TestCase):
                 "weight": 0.5,
             },
         ]
-
         evaluator = _create_evaluator_for_eval_fns(eval_fns)
 
         def eval_fn_wrapper(model):
             result = evaluator.evaluate(model)
             return result
-
-        custom_tune_config = tuning.TuningConfig(
-            config_set=[config.AWQConfig(weight_group_size=32), config.AWQConfig(weight_group_size=64)]
-        )
-        best_model = tuning.autotune(
-            model_input=self.gptj,
-            tune_config=custom_tune_config,
-            eval_fn=eval_acc_fn,
-            calibration_data_reader=self.data_reader,
-        )
-        self.assertIsNone(best_model)
 
         custom_tune_config = tuning.TuningConfig(config_set=[config.AWQConfig(weight_group_size=[32, 64])])
         best_model = tuning.autotune(
@@ -262,16 +248,20 @@ class TestONNXRT3xAutoTune(unittest.TestCase):
         self.assertTrue(len(op_names) > 0)
 
     def test_gptq_auto_tune(self):
-        acc_data = iter([1.0, 0.8, 0.6, 1.0, 0.99, 0.9])
+        eval_acc_fn = functools.partial(fake_eval, eval_result_lst=[1.0, 0.8, 0.9])
+        with self.assertRaises(SystemExit):
+            custom_tune_config = tuning.TuningConfig(
+                config_set=[config.GPTQConfig(weight_group_size=32), config.GPTQConfig(weight_group_size=64)]
+            )
+            best_model = tuning.autotune(
+                model_input=self.gptj,
+                tune_config=custom_tune_config,
+                eval_fn=eval_acc_fn,
+                calibration_data_reader=self.data_reader,
+            )
 
-        def eval_acc_fn(model) -> float:
-            return next(acc_data)
-
-        perf_data = iter([1.0, 0.99, 0.99])
-
-        def eval_perf_fn(model) -> float:
-            return next(perf_data)
-
+        eval_perf_fn = functools.partial(fake_eval, eval_result_lst=[1.0, 0.99, 0.99])
+        eval_acc_fn = functools.partial(fake_eval, eval_result_lst=[1.0, 0.99, 0.99])
         eval_fns = [
             {"eval_fn": eval_acc_fn, "weight": 0.5, "name": "accuracy"},
             {
@@ -284,17 +274,6 @@ class TestONNXRT3xAutoTune(unittest.TestCase):
         def eval_fn_wrapper(model):
             result = evaluator.evaluate(model)
             return result
-
-        custom_tune_config = tuning.TuningConfig(
-            config_set=[config.GPTQConfig(weight_group_size=32), config.GPTQConfig(weight_group_size=64)]
-        )
-        best_model = tuning.autotune(
-            model_input=self.gptj,
-            tune_config=custom_tune_config,
-            eval_fn=eval_acc_fn,
-            calibration_data_reader=self.data_reader,
-        )
-        self.assertIsNone(best_model)
 
         custom_tune_config = tuning.TuningConfig(config_set=[config.GPTQConfig(weight_group_size=[32, 64])])
         best_model = tuning.autotune(
@@ -370,7 +349,6 @@ class TestONNXRT3xAutoTune(unittest.TestCase):
         ]
         self.assertTrue(len(op_names) > 0)
 
-
     def test_dynamic_auto_tune(self):
         partial_fake_eval = functools.partial(fake_eval, eval_result_lst=[1.0, 0.8, 0.99, 0.81, 1.0, 0.99])
 
@@ -381,23 +359,6 @@ class TestONNXRT3xAutoTune(unittest.TestCase):
             eval_fn=partial_fake_eval,
         )
         self.assertIsNotNone(best_model)
-
-    def test_dynamic_dml_custom_auto_tune(self):
-        partial_fake_eval = functools.partial(fake_eval, eval_result_lst=[1.0, 0.8, 0.82, 0.81, 1.0, 0.99])
-        for execution_provider in ["DmlExecutionProvider", "TensorrtExecutionProvider"]:
-            with self.assertRaises(SystemExit):
-                custom_tune_config = tuning.TuningConfig(
-                    config_set=config.DynamicQuantConfig(
-                        per_channel=[True, False],
-                        execution_provider=execution_provider,
-                    )
-                )
-                best_model = tuning.autotune(
-                    model_input=self.gptj,
-                    tune_config=custom_tune_config,
-                    eval_fn=partial_fake_eval,
-                    calibration_data_reader=self.data_reader,
-                )
 
     def test_dynamic_custom_auto_tune(self):
         partial_fake_eval = functools.partial(fake_eval, eval_result_lst=[1.0, 0.8, 0.99])
@@ -419,6 +380,22 @@ class TestONNXRT3xAutoTune(unittest.TestCase):
         self.assertTrue("MatMulInteger" in optypes)
         ort.InferenceSession(best_model.SerializeToString(), providers=["CPUExecutionProvider"])
         self.assertIsNotNone(best_model)
+
+        partial_fake_eval = functools.partial(fake_eval, eval_result_lst=[1.0, 0.8, 0.82, 0.81, 1.0, 0.99])
+        for execution_provider in ["DmlExecutionProvider", "TensorrtExecutionProvider"]:
+            with self.assertRaises(SystemExit):
+                custom_tune_config = tuning.TuningConfig(
+                    config_set=config.DynamicQuantConfig(
+                        per_channel=[True, False],
+                        execution_provider=execution_provider,
+                    )
+                )
+                best_model = tuning.autotune(
+                    model_input=self.gptj,
+                    tune_config=custom_tune_config,
+                    eval_fn=partial_fake_eval,
+                    calibration_data_reader=self.data_reader,
+                )
 
     def test_static_default_auto_tune(self):
         partial_fake_eval = functools.partial(fake_eval, eval_result_lst=[1.0, 0.99])
@@ -463,6 +440,29 @@ class TestONNXRT3xAutoTune(unittest.TestCase):
         self.assertTrue("QuantizeLinear" in optypes)
         ort.InferenceSession(best_model.SerializeToString(), providers=["CPUExecutionProvider"])
         self.assertIsNotNone(best_model)
+
+    @mock.patch("onnx_neural_compressor.logger.warning")
+    def test_skip_verified_config_mapping(self, mock_warning):
+        partial_fake_eval = functools.partial(fake_eval, eval_result_lst=[1.0, 0.8, 0.99])
+
+        with self.assertRaises(SystemExit):
+            custom_tune_config = tuning.TuningConfig(
+                config_set=config.StaticQuantConfig(
+                    per_channel=[True, False],
+                    execution_provider="DmlExecutionProvider",
+                )
+            )
+            best_model = tuning.autotune(
+                model_input=self.gptj,
+                tune_config=custom_tune_config,
+                eval_fn=partial_fake_eval,
+                calibration_data_reader=self.data_reader,
+            )
+        call_args_list = mock_warning.call_args_list
+        # There may be multiple calls to warning, so we need to check all of them
+        self.assertIn(
+            "Skip the verified config mapping.", [info[0][0] for info in call_args_list]
+        )
 
 if __name__ == "__main__":
     unittest.main()

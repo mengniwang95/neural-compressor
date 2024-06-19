@@ -71,7 +71,7 @@ class TestQuantizationConfig(unittest.TestCase):
 
     def _check_node_is_quantized(self, model, node_name):
         for node in model.graph.node:
-            if (node.name == node_name or node.name == node_name + "_Q4") and node.op_type in [
+            if (node.name == node_name or ("_Q4G" in node.name and node_name in node.name)) and node.op_type in [
                 "MatMulNBits",
                 "MatMulFpQ4",
             ]:
@@ -101,7 +101,15 @@ class TestQuantizationConfig(unittest.TestCase):
                     self.assertTrue(configs_mapping["Matmul"]["per_channel"])
                 elif idx == 1:
                     self.assertFalse(configs_mapping["Matmul"]["per_channel"])
-                self.assertLess(idx, 4)
+                if 3 < idx < 8:
+                    self.assertTrue("LSTM" not in quant_config.op_types_to_quantize)
+                elif 7 < idx < 12:
+                    self.assertTrue("Conv" not in quant_config.op_types_to_quantize)
+                elif 11 < idx < 16:
+                    self.assertTrue("Attention" not in quant_config.op_types_to_quantize)
+                elif 15 < idx < 20:
+                    self.assertTrue("MatMul" not in quant_config.op_types_to_quantize)
+                self.assertLess(idx, 20)
                 self.assertTrue("add" not in configs_mapping and "add2" not in configs_mapping)
 
         for execution_provider in ["DmlExecutionProvider", "TensorrtExecutionProvider"]:
@@ -118,7 +126,7 @@ class TestQuantizationConfig(unittest.TestCase):
                 self.assertTrue("add2" not in configs_mapping)
                 self.assertTrue("Matmul" not in configs_mapping)
 
-            self.assertEqual(len(config_loader.config_set), 4)
+            self.assertEqual(len(config_loader.config_set), 20)
 
     def test_dynamic_custom_quant_config(self):
         for execution_provider in ["CPUExecutionProvider", "CUDAExecutionProvider", "DnnlExecutionProvider"]:
@@ -169,13 +177,17 @@ class TestQuantizationConfig(unittest.TestCase):
             for idx, quant_config in enumerate(config_loader):
                 model_info = quant_config.get_model_info(model=self.simple_onnx_model)
                 configs_mapping = quant_config.to_config_mapping(model_info=model_info)
-                if idx in [0, 2, 4]:
+                if idx in [0, 4]:
                     self.assertTrue(configs_mapping["Matmul"]["per_channel"])
-                elif idx in [1, 3, 5]:
+                elif idx in [1, 5]:
                     self.assertFalse(configs_mapping["Matmul"]["per_channel"])
-                self.assertEqual(configs_mapping["add"]["calibrate_method"], quantization.CalibrationMethod.MinMax)
-                self.assertEqual(configs_mapping["Matmul"]["calibrate_method"], quantization.CalibrationMethod.MinMax)
-                self.assertLess(idx, 6)
+                if idx < 4:
+                    self.assertEqual(configs_mapping["add"]["calibrate_method"], quantization.CalibrationMethod.MinMax)
+                else:
+                    self.assertFalse("add" in configs_mapping)
+                if idx in [0, 1]:
+                    self.assertEqual(configs_mapping["Matmul"]["calibrate_method"], quantization.CalibrationMethod.MinMax)
+                self.assertLess(idx, 16)
 
         for execution_provider in ["TensorrtExecutionProvider"]:
             tuning_config = tuning.TuningConfig(
@@ -192,7 +204,7 @@ class TestQuantizationConfig(unittest.TestCase):
                 self.assertTrue("add2" not in configs_mapping)
                 self.assertTrue("Matmul" not in configs_mapping)
 
-            self.assertEqual(len(config_loader.config_set), 4)
+            self.assertEqual(len(config_loader.config_set), 16)
 
         for execution_provider in ["DmlExecutionProvider"]:
             tuning_config = tuning.TuningConfig(
@@ -204,10 +216,12 @@ class TestQuantizationConfig(unittest.TestCase):
             for idx, quant_config in enumerate(config_loader):
                 model_info = quant_config.get_model_info(model=self.simple_onnx_model)
                 configs_mapping = quant_config.to_config_mapping(model_info=model_info)
-                self.assertFalse(configs_mapping["Matmul"]["per_channel"])
-                self.assertEqual(configs_mapping["add"]["calibrate_method"], quantization.CalibrationMethod.MinMax)
-                self.assertEqual(configs_mapping["Matmul"]["calibrate_method"], quantization.CalibrationMethod.MinMax)
-                self.assertLess(idx, 4)
+                if "Matmul" in configs_mapping:
+                    self.assertFalse(configs_mapping["Matmul"]["per_channel"])
+                    self.assertEqual(configs_mapping["Matmul"]["calibrate_method"], quantization.CalibrationMethod.MinMax)
+                if "add" in configs_mapping:
+                    self.assertEqual(configs_mapping["add"]["calibrate_method"], quantization.CalibrationMethod.MinMax)
+                self.assertLess(idx, 16)
 
         for execution_provider in ["TensorrtExecutionProvider"]:
             tuning_config = tuning.TuningConfig(
@@ -220,17 +234,19 @@ class TestQuantizationConfig(unittest.TestCase):
             for idx, quant_config in enumerate(config_loader):
                 model_info = quant_config.get_model_info(model=self.simple_onnx_model)
                 configs_mapping = quant_config.to_config_mapping(model_info=model_info)
-                if idx in [0, 2, 4]:
+                if idx in [0, 4]:
                     self.assertTrue(configs_mapping["Matmul"]["per_channel"])
-                elif idx in [1, 3, 5]:
+                elif idx in [1, 5]:
                     self.assertFalse(configs_mapping["Matmul"]["per_channel"])
-                self.assertEqual(configs_mapping["add"]["calibrate_method"], quantization.CalibrationMethod.MinMax)
-                self.assertEqual(configs_mapping["add"]["calibrate_method"], quantization.CalibrationMethod.MinMax)
-                self.assertTrue(configs_mapping["add"]["weight_sym"])
-                self.assertTrue(configs_mapping["add"]["activation_sym"])
-                self.assertTrue(configs_mapping["Matmul"]["weight_sym"])
-                self.assertTrue(configs_mapping["Matmul"]["activation_sym"])
-                self.assertLess(idx, 6)
+                if "add" in configs_mapping:
+                    self.assertEqual(configs_mapping["add"]["calibrate_method"], quantization.CalibrationMethod.MinMax)
+                    self.assertEqual(configs_mapping["add"]["calibrate_method"], quantization.CalibrationMethod.MinMax)
+                    self.assertTrue(configs_mapping["add"]["weight_sym"])
+                    self.assertTrue(configs_mapping["add"]["activation_sym"])
+                if "Matmul" in configs_mapping:
+                    self.assertTrue(configs_mapping["Matmul"]["weight_sym"])
+                    self.assertTrue(configs_mapping["Matmul"]["activation_sym"])
+                self.assertLess(idx, 16)
 
     def test_static_custom_quant_config(self):
         for execution_provider in ["CPUExecutionProvider", "CUDAExecutionProvider", "DnnlExecutionProvider"]:
@@ -338,7 +354,7 @@ class TestQuantizationConfig(unittest.TestCase):
         quant_config = global_config + fc_out_config
         # get model and quantize
         fp32_model = self.gptj
-        model_info = utility.get_model_info(fp32_model, white_op_type_list=["MatMul"])
+        model_info = config.RTNConfig.get_model_info(fp32_model)
         logger.info(quant_config)
         configs_mapping = quant_config.to_config_mapping(model_info=model_info)
         logger.info(configs_mapping)
@@ -395,6 +411,7 @@ class TestQuantizationConfig(unittest.TestCase):
                 },
             }
         }
+
         q_config2 = config.RTNConfig.from_dict(quant_config2["rtn"])
         q_config3 = q_config + q_config2
         q3_dict = q_config3.to_dict()
@@ -410,7 +427,7 @@ class TestQuantizationConfig(unittest.TestCase):
         quant_config.set_local("/h.4/mlp/fc_out/MatMul", fc_out_config)
         # get model and quantize
         fp32_model = self.gptj
-        model_info = utility.get_model_info(fp32_model, white_op_type_list=["MatMul"])
+        model_info = config.RTNConfig.get_model_info(fp32_model)
         logger.info(quant_config)
         configs_mapping = quant_config.to_config_mapping(model_info=model_info)
         logger.info(configs_mapping)

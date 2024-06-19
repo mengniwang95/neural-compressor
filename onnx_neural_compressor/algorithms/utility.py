@@ -156,6 +156,7 @@ def make_matmul_weight_only_node(
     blob_size = _get_blob_size(group_size, zero_point is not None)
     packed = np.zeros((q_weight.shape[0], blob_size), dtype="uint8")
     q_weight_name = node.input[1] + "_Q{}G{}".format(str(num_bits), str(group_size))
+    q_node_name = node.name + "_Q{}G{}".format(str(num_bits), str(group_size))
     input_names = [node.input[0], q_weight_name]
     new_inits = []
     kwargs = {}
@@ -255,7 +256,7 @@ def make_matmul_weight_only_node(
         op_type,
         inputs=input_names,
         outputs=node.output,
-        name=node.name + "_Q" + str(num_bits) if node.name else "_Q" + str(num_bits),
+        name=q_node_name,
         domain="com.microsoft",
         **kwargs,
     )

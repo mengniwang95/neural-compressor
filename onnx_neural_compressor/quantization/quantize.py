@@ -33,7 +33,7 @@ def quantize(
     with tempfile.TemporaryDirectory(prefix="ort.opt.") as tmp_dir:
         if optimization_level != ort.GraphOptimizationLevel.ORT_DISABLE_ALL:
             sess_options = ort.SessionOptions()
-            sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_EXTENDED
+            sess_options.graph_optimization_level = optimization_level
             sess_options.optimized_model_filepath =  pathlib.Path(tmp_dir).joinpath("opt.onnx").as_posix()
             session = ort.InferenceSession(model_input, sess_options)
             del session

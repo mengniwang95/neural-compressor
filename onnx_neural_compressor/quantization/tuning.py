@@ -15,12 +15,14 @@
 import copy
 import os
 import pathlib
+import shutil
 import tempfile
 import traceback
 import uuid
 
 import onnx
 import onnxruntime as ort
+from onnx import external_data_helper
 from onnx_neural_compressor import config
 from onnx_neural_compressor import data_reader
 from onnx_neural_compressor import logger
@@ -103,7 +105,7 @@ class Evaluator:
             {
                 self.EVAL_FN: user_eval_fn_pair[self.EVAL_FN],
                 self.WEIGHT: user_eval_fn_pair.get(self.WEIGHT, 1.0),
-                self.FN_NAME: user_eval_fn_pair.get(self.FN_NAME, user_eval_fn_pair[self.EVAL_FN].__name__),
+                self.FN_NAME: user_eval_fn_pair.get(self.FN_NAME, getattr(user_eval_fn_pair[self.EVAL_FN], "__name__", "custom_func")),
             }
             for user_eval_fn_pair in user_eval_fns
         ]
@@ -246,8 +248,8 @@ class ConfigLoader:
         for index in self._sampler:
             new_config = self.config_set[index]
             if self.skip_verified_config and self.is_verified_config(new_config):
-                logger.warning("Skip the verified config:")
-                logger.warning(new_config.to_dict())
+                logger.debug("Skip the verified config:")
+                logger.debug(new_config.to_dict())
                 continue
             self.verify_config_list.append(new_config)
             yield new_config
@@ -335,6 +337,14 @@ class TuningMonitor:
 
     def get_number_of_trials(self):
         return len(self.tuning_history)
+
+    def need_skip(self, config) -> bool:
+        """Check whether the expanded quant config is verified."""
+        if len(self.tuning_history) > 0 and any([config == i.quant_config.config_mapping for i in self.tuning_history]):
+            logger.warning("Skip the verified config mapping.")
+            logger.debug(config)
+            return True
+        return False
 
     def need_stop(self) -> bool:
         """Check if need to stop tuning. Either accuracy goal is met, max trials is reached or timeout is reached.
@@ -478,11 +488,11 @@ def autotune(
     best_quant_model = None
     eval_func_wrapper = EvaluationFuncWrapper(eval_fn, eval_args)
     config_loader, tuning_logger, tuning_monitor = init_tuning(tuning_config=tune_config)
-    opt_tmp_file = tempfile.TemporaryDirectory()
+    tmp_folder = tempfile.TemporaryDirectory()
     if optimization_level != ort.GraphOptimizationLevel.ORT_DISABLE_ALL:
         sess_options = ort.SessionOptions()
         sess_options.graph_optimization_level = optimization_level
-        sess_options.optimized_model_filepath = pathlib.Path(opt_tmp_file.name).joinpath("opt.onnx").as_posix()
+        sess_options.optimized_model_filepath = pathlib.Path(tmp_folder.name).joinpath("opt.onnx").as_posix()
         session = ort.InferenceSession(model_input, sess_options)
         model_input = sess_options.optimized_model_filepath
         del session
@@ -499,43 +509,48 @@ def autotune(
     tuning_monitor.set_baseline(baseline)
     tuning_logger.tuning_start()
     for trial_index, quant_config in enumerate(config_loader):
+        # check whether config_mapping is verified
+        model_info = quant_config.__class__.get_model_info(model=model_input)
+        config_mapping = quant_config.to_config_mapping(model_info=model_info)
+        if tuning_monitor.need_skip(config_mapping):
+            continue
+
         if calibration_data_reader is not None:
             calibration_data_reader.rewind()
+
         tuning_logger.trial_start(trial_index=trial_index)
         tuning_logger.quantization_start()
         tuning_monitor.print_config_diff(quant_config)
         q_model = _quantize(model_input, quant_config=quant_config, calibration_data_reader=calibration_data_reader)
         tuning_logger.quantization_end()
         tuning_logger.evaluation_start()
-        with tempfile.TemporaryDirectory(prefix="ort.quant.") as tmp_dir:
-            # evaluate API requires str input
-            onnx.save_model(
-                q_model,
-                pathlib.Path(tmp_dir).joinpath(pathlib.Path(model_input).name).as_posix(),
-                save_as_external_data=True,
-                all_tensors_to_one_file=True,
-                location=pathlib.Path(model_input).with_suffix(pathlib.Path(model_input).suffix + "_data").name,
-                size_threshold=1024,
-                convert_attribute=False,
+        # evaluate API requires str input
+        onnx.save_model(
+            q_model,
+            pathlib.Path(tmp_folder.name).joinpath("eval.onnx").as_posix(),
+            save_as_external_data=True,
+            all_tensors_to_one_file=True,
+            location="eval.onnx_data",
+            size_threshold=1024,
+            convert_attribute=False,
+        )
+        # copy config.json to tmp dir for evaluation, LLMs evaluation may need it
+        if isinstance(model_input, str) and os.path.exists(
+            pathlib.Path(model_input).parent.joinpath("config.json").as_posix()
+        ):
+            shutil.copyfile(
+                pathlib.Path(model_input).parent.joinpath("config.json").as_posix(),
+                pathlib.Path(tmp_folder.name).joinpath("config.json").as_posix(),
             )
-            # copy config.json to tmp dir for evaluation, LLMs evaluation may need it
-            if isinstance(model_input, str) and os.path.exists(
-                pathlib.Path(model_input).parent.joinpath("config.json").as_posix()
-            ):
-                import shutil
-
-                shutil.copyfile(
-                    pathlib.Path(model_input).parent.joinpath("config.json").as_posix(),
-                    pathlib.Path(tmp_dir).joinpath("config.json").as_posix(),
-                )
-            eval_result: float = eval_func_wrapper.evaluate(
-                pathlib.Path(tmp_dir).joinpath(pathlib.Path(model_input).name).as_posix()
-            )
+        eval_result: float = eval_func_wrapper.evaluate(
+            pathlib.Path(tmp_folder.name).joinpath("eval.onnx").as_posix()
+        )
         tuning_logger.evaluation_end()
         logger.info("Evaluation result: %.4f", eval_result)
         tuning_monitor.add_trial_result(trial_index, eval_result, quant_config)
         tuning_logger.trial_end(trial_index)
         if tuning_monitor.need_stop():
+            external_data_helper.load_external_data_for_model(q_model, tmp_folder.name)
             best_quant_model = q_model
             break
 
@@ -545,5 +560,5 @@ def autotune(
             "Please try other configs or adjust tolerable_loss.")
         exit(0)
 
-    opt_tmp_file.cleanup()
+    tmp_folder.cleanup()
     return best_quant_model

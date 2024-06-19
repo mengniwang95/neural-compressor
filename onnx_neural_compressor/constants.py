@@ -52,6 +52,12 @@ MAXIMUM_PROTOBUF = 2147483648
 
 WHITE_MODULE_LIST = ["MatMul", "Conv"]
 
+RTN_OP_LIST = ["MatMul"]
+
+AWQ_OP_LIST = ["MatMul"]
+
+GPTQ_OP_LIST = ["MatMul"]
+
 DYNAMIC_CPU_OP_LIST = [
     "FusedConv", "Conv", "EmbedLayerNormalization", "MatMul", "Gather", "Attention", "LSTM"
 ]

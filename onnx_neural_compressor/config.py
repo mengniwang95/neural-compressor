@@ -217,6 +217,7 @@ class BaseConfig(ABC):
         # local config is the collections of operator_type configs and operator configs
         self._local_config: Dict[str, Optional[BaseConfig]] = {}
         self._white_list = white_list
+        self._config_mapping = OrderedDict()
 
     def _post_init(self):
         if self.white_list == constants.DEFAULT_WHITE_LIST:
@@ -234,6 +235,10 @@ class BaseConfig(ABC):
                 f"The white list should be one of {constants.DEFAULT_WHITE_LIST}, {constants.EMPTY_WHITE_LIST},"
                 " a not empty list, but got {self.white_list}"
             )
+
+    @property
+    def config_mapping(self):
+        return self._config_mapping
 
     @property
     def white_list(self):
@@ -272,7 +277,7 @@ class BaseConfig(ABC):
             result[constants.LOCAL] = {}
             for op_name, config in self.local_config.items():
                 result[constants.LOCAL][op_name] = config.to_dict()
-            if self.global_config:
+            if global_config:
                 result[constants.GLOBAL] = global_config
         else:
             result = global_config
@@ -288,7 +293,7 @@ class BaseConfig(ABC):
     def get_init_args(self):
         result = dict()
         for param, value in self.__dict__.items():
-            if param not in ["_global_config", "_local_config", "_white_list"]:
+            if param not in ["_global_config", "_local_config", "_white_list", "_config_mapping"]:
                 result[param] = value
         return result
 
@@ -319,7 +324,7 @@ class BaseConfig(ABC):
             operator_config = config_dict.get(constants.LOCAL, {})
             if operator_config:
                 for op_name, op_config in operator_config.items():
-                    config.set_local(op_name, cls(**op_config))
+                    config.set_local(op_name, cls(**op_config, white_list=None))
             return config
 
     def get_diff_dict(self, config) -> Dict[str, Any]:
@@ -508,7 +513,6 @@ class BaseConfig(ABC):
     def to_config_mapping(
         self, config_list: Optional[List[BaseConfig]] = None, model_info: List[Tuple[str, str]] = None
     ) -> OrderedDict[Tuple[str, str], OrderedDict[str, BaseConfig]]:
-        config_mapping = OrderedDict()
         if config_list is None:
             config_list = [self]
         for config in config_list:
@@ -516,15 +520,15 @@ class BaseConfig(ABC):
             op_type_config_dict, op_name_config_dict = config._get_op_name_op_type_config()
             for op_name, op_type in model_info:
                 if self.global_config is not None:
-                    config_mapping[op_name] = global_config
+                    self._config_mapping[op_name] = global_config
                 if op_type in op_type_config_dict:
-                    config_mapping[op_name] = op_name_config_dict[op_type]
+                    self._config_mapping[op_name] = op_name_config_dict[op_type]
                 for op_name_pattern in op_name_config_dict:
                     if isinstance(op_name, str) and re.match(op_name_pattern, op_name):
-                        config_mapping[op_name] = op_name_config_dict[op_name_pattern]
+                        self._config_mapping[op_name] = op_name_config_dict[op_name_pattern]
                     elif op_name_pattern == op_name:
-                        config_mapping[op_name] = op_name_config_dict[op_name_pattern]
-        return config_mapping
+                        self._config_mapping[op_name] = op_name_config_dict[op_name_pattern]
+        return self._config_mapping
 
     @staticmethod
     def _is_op_type(name: str) -> bool:
@@ -579,17 +583,16 @@ class ComposableConfig(BaseConfig):
     def to_config_mapping(
         self, config_list: List[BaseConfig] = None, model_info: Dict[str, Any] = None
     ) -> OrderedDict[str, BaseConfig]:
-        config_mapping = OrderedDict()
         for config in self.config_list:
             op_type_config_dict, op_name_config_dict = config._get_op_name_op_type_config()
             single_config_model_info = model_info.get(config.name, None)
             for op_name, op_type in single_config_model_info:
                 if op_type in op_type_config_dict:
-                    config_mapping[op_name] = op_name_config_dict[op_type]
+                    self._config_mapping[op_name] = op_name_config_dict[op_type]
                 for op_name_pattern in op_name_config_dict:
                     if re.match(op_name_pattern, op_name):
-                        config_mapping[op_name] = op_name_config_dict[op_name_pattern]
-        return config_mapping
+                        self._config_mapping[op_name] = op_name_config_dict[op_name_pattern]
+        return self._config_mapping
 
     @classmethod
     def register_supported_configs(cls):
@@ -670,6 +673,12 @@ class OperatorConfig:
                 ]
         return result
 
+    def __eq__(self, other):
+        if isinstance(other, OperatorConfig):
+            return self.to_dict() == other.to_dict()
+        else:
+            return self.to_dict() == other
+
 class _OperatorConfig(NamedTuple):
     config: OperatorConfig
     operators: List[Union[str, Callable]]
@@ -711,7 +720,7 @@ class RTNConfig(BaseConfig):
         providers: List[str] = ["CPUExecutionProvider"],
         layer_wise_quant: bool = False,
         quant_last_matmul: bool = True,
-        white_list: List[Union[str, Callable]] = constants.DEFAULT_WHITE_LIST,
+        white_list: List[Union[str, Callable]] = constants.RTN_OP_LIST,
     ):
         """Init RTN weight-only quantization config.
 
@@ -763,41 +772,40 @@ class RTNConfig(BaseConfig):
             weight_sym=[True, False],
             act_dtype=["fp32"],
         )
-        operators = ["MatMul"]
+        operators = constants.RTN_OP_LIST
         supported_configs.append(_OperatorConfig(config=linear_rtn_config, operators=operators))
         cls.supported_configs = supported_configs
 
     def to_config_mapping(self, config_list: List[BaseConfig] = None, model_info: list = None):
-        config_mapping = OrderedDict()
         if config_list is None:
             config_list = [self]
         for config in config_list:
             # update model level setting
-            config_mapping.update(config.get_model_params_dict())
+            self._config_mapping.update(config.get_model_params_dict())
 
             # update node level setting
             global_config = config.get_params_dict()
             op_type_config_dict, op_name_config_dict = config._get_op_name_op_type_config()
             for op_name, op_type in model_info:
                 if self.global_config is not None:
-                    config_mapping[op_name] = global_config
+                    self._config_mapping[op_name] = global_config
                 if op_type in op_type_config_dict:
-                    config_mapping[op_name] = op_name_config_dict[op_type]
+                    self._config_mapping[op_name] = op_type_config_dict[op_type]
                 for op_name_pattern in op_name_config_dict:
                     if re.match(op_name_pattern, op_name):
-                        config_mapping[op_name] = op_name_config_dict[op_name_pattern]
+                        self._config_mapping[op_name] = op_name_config_dict[op_name_pattern]
         if not self.quant_last_matmul:
-            config_mapping[model_info[-1][0]] = {
+            self._config_mapping[model_info[-1][0]] = {
                 "weight": {"dtype": "fp32"},
                 "activation": {"dtype": "fp32", "quant_mode": "fp32"},
             }
-        return config_mapping
+        return self._config_mapping
 
     @staticmethod
-    def get_model_info(model: Union[onnx.ModelProto, pathlib.Path, str]) -> list:
+    def get_model_info(model: Union[onnx.ModelProto, pathlib.Path, str], white_list=constants.RTN_OP_LIST) -> list:
         if not isinstance(model, onnx.ModelProto):
             model = onnx.load(model, load_external_data=False)
-        white_list = ["MatMul"]
+
         filter_result = []
         for node in model.graph.node:
             if node.op_type in white_list:
@@ -863,7 +871,7 @@ class GPTQConfig(BaseConfig):
         providers: List[str] = ["CPUExecutionProvider"],
         layer_wise_quant: bool = False,
         quant_last_matmul: bool = True,
-        white_list: List[Union[str, Callable]] = constants.DEFAULT_WHITE_LIST,
+        white_list: List[Union[str, Callable]] = constants.GPTQ_OP_LIST,
     ):
         """Init GPTQ weight-only quantization config.
 
@@ -928,41 +936,40 @@ class GPTQConfig(BaseConfig):
             mse=[True, False],
             perchannel=[True, False],
         )
-        operators = ["MatMul"]
+        operators = constants.GPTQ_OP_LIST
         supported_configs.append(_OperatorConfig(config=linear_gptq_config, operators=operators))
         cls.supported_configs = supported_configs
 
     def to_config_mapping(self, config_list: list = None, model_info: list = None) -> OrderedDict:
-        config_mapping = OrderedDict()
         if config_list is None:
             config_list = [self]
         for config in config_list:
             # update model level setting
-            config_mapping.update(config.get_model_params_dict())
+            self._config_mapping.update(config.get_model_params_dict())
 
             # update node level setting
             global_config = config.get_params_dict()
             op_type_config_dict, op_name_config_dict = config._get_op_name_op_type_config()
             for op_name, op_type in model_info:
                 if self.global_config is not None:
-                    config_mapping[op_name] = global_config
+                    self._config_mapping[op_name] = global_config
                 if op_type in op_type_config_dict:
-                    config_mapping[op_name] = op_name_config_dict[op_type]
+                    self._config_mapping[op_name] = op_type_config_dict[op_type]
                 for op_name_pattern in op_name_config_dict:
                     if re.match(op_name_pattern, op_name):
-                        config_mapping[op_name] = op_name_config_dict[op_name_pattern]
+                        self._config_mapping[op_name] = op_name_config_dict[op_name_pattern]
         if not self.quant_last_matmul:
-            config_mapping[model_info[-1][0]] = {
+            self._config_mapping[model_info[-1][0]] = {
                 "weight": {"dtype": "fp32"},
                 "activation": {"dtype": "fp32", "quant_mode": "fp32"},
             }
-        return config_mapping
+        return self._config_mapping
 
     @staticmethod
-    def get_model_info(model: Union[onnx.ModelProto, pathlib.Path, str]) -> list:
+    def get_model_info(model: Union[onnx.ModelProto, pathlib.Path, str], white_list=constants.GPTQ_OP_LIST) -> list:
         if not isinstance(model, onnx.ModelProto):
             model = onnx.load(model, load_external_data=False)
-        white_list = ["MatMul"]
+
         filter_result = []
         for node in model.graph.node:
             if node.op_type in white_list:
@@ -1026,7 +1033,7 @@ class AWQConfig(BaseConfig):
         enable_mse_search: bool = True,
         providers: List[str] = ["CPUExecutionProvider"],
         quant_last_matmul: bool = True,
-        white_list: List[Union[str, Callable]] = constants.DEFAULT_WHITE_LIST,
+        white_list: List[Union[str, Callable]] = constants.AWQ_OP_LIST,
     ):
         """Init AWQ weight-only quantization config.
 
@@ -1079,41 +1086,40 @@ class AWQConfig(BaseConfig):
             enable_auto_scale=[True, False],
             enable_mse_search=[True, False],
         )
-        operators = ["MatMul"]
+        operators = constants.AWQ_OP_LIST
         supported_configs.append(_OperatorConfig(config=linear_awq_config, operators=operators))
         cls.supported_configs = supported_configs
 
     def to_config_mapping(self, config_list: list = None, model_info: list = None) -> OrderedDict:
-        config_mapping = OrderedDict()
         if config_list is None:
             config_list = [self]
         for config in config_list:
             # update model level setting
-            config_mapping.update(config.get_model_params_dict())
+            self._config_mapping.update(config.get_model_params_dict())
 
             # update node level setting
             global_config = config.get_params_dict()
             op_type_config_dict, op_name_config_dict = config._get_op_name_op_type_config()
             for op_name, op_type in model_info:
                 if self.global_config is not None:
-                    config_mapping[op_name] = global_config
+                    self._config_mapping[op_name] = global_config
                 if op_type in op_type_config_dict:
-                    config_mapping[op_name] = op_name_config_dict[op_type]
+                    self._config_mapping[op_name] = op_type_config_dict[op_type]
                 for op_name_pattern in op_name_config_dict:
                     if re.match(op_name_pattern, op_name):
-                        config_mapping[op_name] = op_name_config_dict[op_name_pattern]
+                        self._config_mapping[op_name] = op_name_config_dict[op_name_pattern]
         if not self.quant_last_matmul:
-            config_mapping[model_info[-1][0]] = {
+            self._config_mapping[model_info[-1][0]] = {
                 "weight": {"dtype": "fp32"},
                 "activation": {"dtype": "fp32", "quant_mode": "fp32"},
             }
-        return config_mapping
+        return self._config_mapping
 
     @staticmethod
-    def get_model_info(model: Union[onnx.ModelProto, pathlib.Path, str]) -> list:
+    def get_model_info(model: Union[onnx.ModelProto, pathlib.Path, str], white_list=constants.AWQ_OP_LIST) -> list:
         if not isinstance(model, onnx.ModelProto):
             model = onnx.load(model, load_external_data=False)
-        white_list = ["MatMul"]
+
         filter_result = []
         for node in model.graph.node:
             if node.op_type in white_list:
@@ -1304,11 +1310,10 @@ class StaticQuantConfig(BaseConfig, quantization.StaticQuantConfig):
         self._post_init()
 
     @staticmethod
-    def get_model_info(model) -> list:
+    def get_model_info(model, white_list=constants.STATIC_QOPERATOR_CPU_OP_LIST) -> list:
         if not isinstance(model, onnx.ModelProto):
             model = onnx.load(model, load_external_data=False)
  
-        white_list = constants.STATIC_QOPERATOR_CPU_OP_LIST
         filter_result = []
         for node in model.graph.node:
             if node.op_type in white_list:
@@ -1338,12 +1343,11 @@ class StaticQuantConfig(BaseConfig, quantization.StaticQuantConfig):
                 self.set_local(op_name_or_type, tmp_config)
 
     def to_config_mapping(self, config_list: list = None, model_info: list = None) -> OrderedDict:
-        config_mapping = OrderedDict()
         if config_list is None:
             config_list = [self]
         for config in config_list:
             # update model level setting
-            config_mapping.update(config.get_model_params_dict())
+            self._config_mapping.update(config.get_model_params_dict())
 
             # update node level setting
             global_config = config.global_config
@@ -1357,16 +1361,16 @@ class StaticQuantConfig(BaseConfig, quantization.StaticQuantConfig):
                 if isinstance(self.nodes_to_exclude, list) and len(self.nodes_to_exclude) > 0 and op_name in self.nodes_to_exclude:
                     continue
                 if op_type in op_type_config_dict:
-                    config_mapping[op_name] = op_type_config_dict[op_type]
+                    self._config_mapping[op_name] = op_type_config_dict[op_type]
                     if op_type == "MatMul":
                         last_matmul = op_name
                 for op_name_pattern in op_name_config_dict:
                     if re.match(op_name_pattern, op_name):
-                        config_mapping[op_name] = op_name_config_dict[op_name_pattern]
+                        self._config_mapping[op_name] = op_name_config_dict[op_name_pattern]
 
-        if not self.quant_last_matmul and last_matmul is not None and last_matmul in config_mapping:
-            del config_mapping[last_matmul]
-        return config_mapping
+        if not self.quant_last_matmul and last_matmul is not None and last_matmul in self._config_mapping:
+            del self._config_mapping[last_matmul]
+        return self._config_mapping
 
     @classmethod
     def get_config_set_for_tuning(
@@ -1478,7 +1482,7 @@ class StaticQuantConfig(BaseConfig, quantization.StaticQuantConfig):
     def to_dict(self):
         result = {}
         for key, val in self.__dict__.items():
-            if key == "_global_config":
+            if key in ["_global_config", "_config_mapping"]:
                 continue
             if key == "_local_config":
                 local_result = {}
@@ -1567,8 +1571,10 @@ class SmoothQuantConfig(StaticQuantConfig):
         cls.supported_configs = supported_configs
 
     @staticmethod
-    def get_model_info(model) -> list:
-        white_list = ["Gemm", "Conv", "MatMul", "FusedConv"]
+    def get_model_info(model, white_list=["Gemm", "Conv", "MatMul", "FusedConv"]) -> list:
+        if not isinstance(model, onnx.ModelProto):
+            model = onnx.load(model, load_external_data=False)
+
         filter_result = []
         for node in model.graph.node:
             if node.op_type in white_list:
@@ -1660,11 +1666,10 @@ class DynamicQuantConfig(BaseConfig, quantization.DynamicQuantConfig):
         self._post_init()
 
     @staticmethod
-    def get_model_info(model) -> list:
+    def get_model_info(model, white_list=constants.DYNAMIC_CPU_OP_LIST) -> list:
         if not isinstance(model, onnx.ModelProto):
             model = onnx.load(model, load_external_data=False)
  
-        white_list = constants.DYNAMIC_CPU_OP_LIST
         filter_result = []
         for node in model.graph.node:
             if node.op_type in white_list:
@@ -1693,12 +1698,11 @@ class DynamicQuantConfig(BaseConfig, quantization.DynamicQuantConfig):
                 self.set_local(op_name_or_type, tmp_config)
 
     def to_config_mapping(self, config_list: list = None, model_info: list = None) -> OrderedDict:
-        config_mapping = OrderedDict()
         if config_list is None:
             config_list = [self]
         for config in config_list:
             # update model level setting
-            config_mapping.update(config.get_model_params_dict())
+            self._config_mapping.update(config.get_model_params_dict())
 
             # update node level setting
             global_config = config.global_config
@@ -1712,16 +1716,16 @@ class DynamicQuantConfig(BaseConfig, quantization.DynamicQuantConfig):
                 if isinstance(self.nodes_to_exclude, list) and len(self.nodes_to_exclude) > 0 and op_name in self.nodes_to_exclude:
                     continue
                 if op_type in op_type_config_dict:
-                    config_mapping[op_name] = op_type_config_dict[op_type]
+                    self._config_mapping[op_name] = op_type_config_dict[op_type]
                     if op_type == "MatMul":
                         last_matmul = op_name
                 for op_name_pattern in op_name_config_dict:
                     if re.match(op_name_pattern, op_name):
-                        config_mapping[op_name] = op_name_config_dict[op_name_pattern]
+                        self._config_mapping[op_name] = op_name_config_dict[op_name_pattern]
 
-        if not self.quant_last_matmul and last_matmul is not None and last_matmul in config_mapping:
-            del config_mapping[last_matmul]
-        return config_mapping
+        if not self.quant_last_matmul and last_matmul is not None and last_matmul in self._config_mapping:
+            del self._config_mapping[last_matmul]
+        return self._config_mapping
 
     @classmethod
     def get_config_set_for_tuning(
@@ -1805,7 +1809,7 @@ class DynamicQuantConfig(BaseConfig, quantization.DynamicQuantConfig):
     def to_dict(self):
         result = {}
         for key, val in self.__dict__.items():
-            if key == "_global_config":
+            if key in ["_global_config", "_config_mapping"]:
                 continue
             if key == "_local_config":
                 local_result = {}

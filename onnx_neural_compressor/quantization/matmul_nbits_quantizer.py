@@ -16,6 +16,8 @@ from typing import List, Union  # isort: skip
 
 import onnx
 import onnxruntime as ort
+import pathlib
+import tempfile
 from onnx_neural_compressor import config
 from onnx_neural_compressor import data_reader
 from onnx_neural_compressor import logger
@@ -103,6 +105,7 @@ class MatMulNBitsQuantizer:
         self.n_bits = n_bits
         self.providers = providers
         self.algorithm = self.algo_config.algorithm
+        self.optimization_level = optimization_level
         assert self.algorithm in [
             "RTN",
             "AWQ",
@@ -156,7 +159,7 @@ class MatMulNBitsQuantizer:
         opt_tmp_file = tempfile.TemporaryDirectory()
 
         # do graph optimization if not layer_wise_quant
-        if not self.algo_config.layer_wise_quant and self.optimization_level != ort.GraphOptimizationLevel.ORT_DISABLE_ALL:
+        if not getattr(self.algo_config, "layer_wise_quant", False) and self.optimization_level != ort.GraphOptimizationLevel.ORT_DISABLE_ALL:
             if not isinstance(model, str):
                 onnx.save(model, pathlib.Path(opt_tmp_file.name).joinpath("tmp.onnx").as_posix())
                 model = pathlib.Path(opt_tmp_file.name).joinpath("tmp.onnx").as_posix()

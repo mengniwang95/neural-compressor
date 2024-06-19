@@ -123,9 +123,9 @@ class TestLayerWiseQuant(unittest.TestCase):
         qmodel = self._apply_quantize(rtn_config, algos.rtn_quantize_entry)
         self.assertTrue(self._check_model_is_quantized(qmodel))
 
-        lwq_quantized_weight = self._get_quantized_matmul_weight(qmodel_lwq, "/lm_head/MatMul_Q4")
+        lwq_quantized_weight = self._get_quantized_matmul_weight(qmodel_lwq, "/lm_head/MatMul_Q4G32")
         self.assertIsNotNone(lwq_quantized_weight)
-        quantized_weight = self._get_quantized_matmul_weight(qmodel, "/lm_head/MatMul_Q4")
+        quantized_weight = self._get_quantized_matmul_weight(qmodel, "/lm_head/MatMul_Q4G32")
         self.assertIsNotNone(quantized_weight)
         self.assertTrue((lwq_quantized_weight == quantized_weight).all())
 
@@ -153,9 +153,9 @@ class TestLayerWiseQuant(unittest.TestCase):
         self.assertTrue(self._check_model_is_quantized(qmodel_lwq))
 
         # compare qmodel
-        lwq_quantized_weight = self._get_quantized_matmul_weight(qmodel_lwq, "/lm_head/MatMul_Q4")
+        lwq_quantized_weight = self._get_quantized_matmul_weight(qmodel_lwq, "/lm_head/MatMul_Q4G128")
         self.assertIsNotNone(lwq_quantized_weight)
-        quantized_weight = self._get_quantized_matmul_weight(qmodel, "/lm_head/MatMul_Q4")
+        quantized_weight = self._get_quantized_matmul_weight(qmodel, "/lm_head/MatMul_Q4G128")
         self.assertIsNotNone(quantized_weight)
         self.assertTrue((lwq_quantized_weight == quantized_weight).all())
 
@@ -170,9 +170,9 @@ class TestLayerWiseQuant(unittest.TestCase):
         qmodel = self._apply_quantize(gptq_config, algos.gptq_quantize_entry, self.calibration_data_reader)
         self.assertTrue(self._check_model_is_quantized(qmodel))
 
-        lwq_quantized_weight = self._get_quantized_matmul_weight(qmodel_lwq, "/lm_head/MatMul_Q4")
+        lwq_quantized_weight = self._get_quantized_matmul_weight(qmodel_lwq, "/lm_head/MatMul_Q4G32")
         self.assertIsNotNone(lwq_quantized_weight)
-        quantized_weight = self._get_quantized_matmul_weight(qmodel, "/lm_head/MatMul_Q4")
+        quantized_weight = self._get_quantized_matmul_weight(qmodel, "/lm_head/MatMul_Q4G32")
         self.assertIsNotNone(quantized_weight)
         self.assertTrue((lwq_quantized_weight == quantized_weight).all())
 
@@ -204,9 +204,9 @@ class TestLayerWiseQuant(unittest.TestCase):
         self.assertTrue(self._check_model_is_quantized(qmodel_lwq))
 
         # compare qmodel
-        lwq_quantized_weight = self._get_quantized_matmul_weight(qmodel_lwq, "/lm_head/MatMul_Q4")
+        lwq_quantized_weight = self._get_quantized_matmul_weight(qmodel_lwq, "/lm_head/MatMul_Q4G128")
         self.assertIsNotNone(lwq_quantized_weight)
-        quantized_weight = self._get_quantized_matmul_weight(qmodel, "/lm_head/MatMul_Q4")
+        quantized_weight = self._get_quantized_matmul_weight(qmodel, "/lm_head/MatMul_Q4G128")
         self.assertIsNotNone(quantized_weight)
         self.assertTrue((lwq_quantized_weight == quantized_weight).all())
 

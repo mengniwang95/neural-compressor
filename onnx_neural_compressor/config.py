@@ -549,6 +549,7 @@ class ComposableConfig(BaseConfig):
 
     def __init__(self, configs: List[BaseConfig]) -> None:
         self.config_list = configs
+        self._config_mapping = OrderedDict()
 
     def __add__(self, other: BaseConfig) -> BaseConfig:
         if isinstance(other, type(self)):

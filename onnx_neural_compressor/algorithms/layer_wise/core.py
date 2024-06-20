@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-#
 # Copyright (c) 2023 MIT HAN Lab
 # This source code is licensed under the MIT license
 #
@@ -26,7 +24,7 @@ import onnxruntime as ort
 from onnx_neural_compressor import data_reader
 from onnx_neural_compressor import logger
 from onnx_neural_compressor import onnx_model
-from onnx_neural_compressor import utility
+from onnx_neural_compressor.algorithms import utility as quant_utils
 
 from typing import Callable, List, Union  # isort: skip
 
@@ -51,7 +49,7 @@ def layer_wise_quant(
         _type_: _description_
     """
     # check whether model shape is inferred
-    if not utility.check_model_with_infer_shapes(model):
+    if not quant_utils.check_model_with_infer_shapes(model):
         logger.error(
             "Before applying layer-wise quantization, please make sure to "
             "run symbolic shape inference on your model like follows:\n"

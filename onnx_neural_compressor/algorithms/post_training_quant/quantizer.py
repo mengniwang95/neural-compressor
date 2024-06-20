@@ -24,7 +24,6 @@ from onnx_neural_compressor.algorithms.post_training_quant.operators import base
 from onnx_neural_compressor.algorithms import utility as quant_utils
 from onnx_neural_compressor import logger
 from onnx_neural_compressor import onnx_model
-from onnx_neural_compressor import utility
 
 
 class Quantizer:
@@ -231,8 +230,8 @@ class Quantizer:
                     for n in dq_nodes:
                         datas.append(
                             [
-                                onnx.numpy_helper.to_array(utility.find_by_name(n.input[1], self.model.initializer())),
-                                onnx.numpy_helper.to_array(utility.find_by_name(n.input[2], self.model.initializer())),
+                                onnx.numpy_helper.to_array(quant_utils.find_by_name(n.input[1], self.model.initializer())),
+                                onnx.numpy_helper.to_array(quant_utils.find_by_name(n.input[2], self.model.initializer())),
                             ]
                         )
                     for idx, data in enumerate(datas):
@@ -338,7 +337,7 @@ class Quantizer:
             or input_name not in self.quantized_value_map
             or (
                 input_name in self.quantized_value_map
-                and utility.find_by_name(self.quantized_value_map[input_name].scale_name, self.model.initializer()) is None
+                and quant_utils.find_by_name(self.quantized_value_map[input_name].scale_name, self.model.initializer()) is None
             )
         ):
             self._dynamic_quantize_bias(input_name, weight_name + "_scale", bias_name, bias_name + "_quantized")
@@ -350,13 +349,13 @@ class Quantizer:
                     beta = onnx.helper.get_attribute_value(beta_attribute[0])
             _, quant_value = self.quantize_bias(bias_name, input_name, weight_name, beta)
             if self.model.get_initializer_share_num(bias_name) == 1:
-                self.model.remove_initializer(utility.find_by_name(bias_name, self.model.initializer()))
+                self.model.remove_initializer(quant_utils.find_by_name(bias_name, self.model.initializer()))
             inputs = [quant_value.q_name, quant_value.scale_name, quant_value.zp_name]
             axis = None
-            if utility.find_by_name(weight_name + "_DequantizeLinear", self.new_nodes):
-                dq_node = utility.find_by_name(weight_name + "_DequantizeLinear", self.new_nodes)
-                if dq_node.op_type == "DequantizeLinear" and utility.find_by_name("axis", dq_node.attribute):
-                    axis = utility.find_by_name("axis", dq_node.attribute).i
+            if quant_utils.find_by_name(weight_name + "_DequantizeLinear", self.new_nodes):
+                dq_node = quant_utils.find_by_name(weight_name + "_DequantizeLinear", self.new_nodes)
+                if dq_node.op_type == "DequantizeLinear" and quant_utils.find_by_name("axis", dq_node.attribute):
+                    axis = quant_utils.find_by_name("axis", dq_node.attribute).i
             dequant_node = onnx.helper.make_node(
                 "DequantizeLinear",
                 inputs,
@@ -366,7 +365,7 @@ class Quantizer:
             )
             self.new_nodes.append(dequant_node)
             self.replace_input.append(
-                [utility.find_by_name(node.name, self.model.nodes()), bias_name, bias_name + "_dequantized"]
+                [quant_utils.find_by_name(node.name, self.model.nodes()), bias_name, bias_name + "_dequantized"]
             )
 
     def quantize_bias(self, bias_name, input_name, weight_name, beta=1.0):
@@ -375,7 +374,7 @@ class Quantizer:
         Zero Point == 0 and Scale == Input_Scale * Weight_Scale
         """
         # get scale for weight
-        weight_scale_initializer = utility.find_by_name(weight_name + "_scale", self.model.initializer())
+        weight_scale_initializer = quant_utils.find_by_name(weight_name + "_scale", self.model.initializer())
         weight_scale = (
             self.tensor_proto_to_array(weight_scale_initializer, os.path.dirname(self.model.model_path))
             if self.model.model_path is not None
@@ -383,7 +382,7 @@ class Quantizer:
         )
 
         # get bias
-        bias_initializer = utility.find_by_name(bias_name, self.model.initializer())
+        bias_initializer = quant_utils.find_by_name(bias_name, self.model.initializer())
         bias_data = (
             self.tensor_proto_to_array(bias_initializer, os.path.dirname(self.model.model_path))
             if self.model.model_path is not None
@@ -397,7 +396,7 @@ class Quantizer:
             _, input_scale_name, _, _, _ = self._get_quantization_params(input_name)
         else:
             raise ValueError(f"Expected {input_name} to be in quantized value map for static quantization")
-        inputscale_initializer = utility.find_by_name(input_scale_name, self.model.initializer())
+        inputscale_initializer = quant_utils.find_by_name(input_scale_name, self.model.initializer())
         input_scale = (
             self.tensor_proto_to_array(inputscale_initializer, os.path.dirname(self.model.model_path))
             if self.model.model_path is not None
@@ -462,7 +461,7 @@ class Quantizer:
         if name in self.quantized_value_map:
             return (name + "_quantized", name + "_zero_point", name + "_scale")
 
-        initializer = utility.find_by_name(weight_name, self.model.initializer())
+        initializer = quant_utils.find_by_name(weight_name, self.model.initializer())
         if initializer is None:
             raise ValueError("{} is not an initializer", weight_name)
 
@@ -656,7 +655,7 @@ class Quantizer:
 
     def is_valid_quantize_weight(self, weight_name):
         """Check weight can be quantized."""
-        weight = utility.find_by_name(weight_name, self.model.initializer())
+        weight = quant_utils.find_by_name(weight_name, self.model.initializer())
         if weight is not None:
             return quant_utils.is_quantizable_type(weight.data_type)
         else:
@@ -672,7 +671,7 @@ class Quantizer:
             quantized_bias_name (string): bias name
         """
         # Add tensors for the shape to be reshaped to
-        weight = utility.find_by_name(weight_name, self.model.initializer())
+        weight = quant_utils.find_by_name(weight_name, self.model.initializer())
         if weight is None:
             raise ValueError("Expected {} to be an initializer".format(node.input[1]))
 
@@ -759,7 +758,7 @@ class Quantizer:
         for idx, tensor_name in enumerate(node.input):
             if indices and idx not in indices:
                 continue
-            initializer = utility.find_by_name(tensor_name, self.model.initializer())
+            initializer = quant_utils.find_by_name(tensor_name, self.model.initializer())
             if initializer is not None:
                 if not quant_utils.is_quantizable_type(initializer.data_type):
                     return
@@ -1044,10 +1043,10 @@ class DynamicQuantizer(Quantizer):
                 # DynamicQuantizeLinear supports uint8 input for CPU EP, supports uint8 and int8 for DML EP
                 scale_name = tensor_name + "_scale"
                 zp_name = tensor_name + "_zero_point"
-                if utility.find_by_name(scale_name, self.model.initializer()):
-                    self.model.remove_initializer(find_by_name(scale_name, self.model.initializer()))
-                if utility.find_by_name(zp_name, self.model.initializer()):
-                    self.model.remove_initializer(find_by_name(zp_name, self.model.initializer()))
+                if quant_utils.find_by_name(scale_name, self.model.initializer()):
+                    self.model.remove_initializer(quant_utils.find_by_name(scale_name, self.model.initializer()))
+                if quant_utils.find_by_name(zp_name, self.model.initializer()):
+                    self.model.remove_initializer(quant_utils.find_by_name(zp_name, self.model.initializer()))
                 qlinear_node = onnx.helper.make_node(
                     "DynamicQuantizeLinear",
                     [tensor_name],

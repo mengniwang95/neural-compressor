@@ -28,7 +28,6 @@ import psutil
 from onnx_neural_compressor import constants
 from onnx_neural_compressor import logger
 from onnxruntime import quantization
-from onnxruntime.quantization import onnx_model
 
 from typing import Callable, Dict, List, Tuple, Union  # isort: skip
 
@@ -78,35 +77,20 @@ class Options:
     This class is used for configuring global variables. The global variable options is created with this class.
     If you want to change global variables, you should use functions from onnx_neural_compressor.utility.py:
         set_random_seed(seed: int)
-        set_workspace(workspace: str)
-        set_resume_from(resume_from: str)
 
     Args:
         random_seed(int): Random seed used in neural compressor.
                           Default value is 1978.
-        workspace(str): The directory where intermediate files and tuning history file are stored.
-                        Default value is:
-                            "./nc_workspace/{}/".format(datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")).
-        resume_from(str): The directory you want to resume tuning history file from.
-                          The tuning history was automatically saved in the workspace directory
-                               during the last tune process.
-                          Default value is None.
 
     Example::
 
         from onnx_neural_compressor import set_random_seed
-        from onnx_neural_compressor import set_workspace
-        from onnx_neural_compressor import set_resume_from
         set_random_seed(2022)
-        set_workspace("workspace_path")
-        set_resume_from("workspace_path")
     """
 
-    def __init__(self, random_seed=1978, workspace=constants.DEFAULT_WORKSPACE, resume_from=None):
+    def __init__(self, random_seed=1978):
         """Init an Option object."""
         self.random_seed = random_seed
-        self.workspace = workspace
-        self.resume_from = resume_from
 
     @property
     def random_seed(self):
@@ -118,29 +102,6 @@ class Options:
         """Set random seed."""
         if check_value("random_seed", random_seed, int):
             self._random_seed = random_seed
-
-    @property
-    def workspace(self):
-        """Get workspace."""
-        return self._workspace
-
-    @workspace.setter
-    def workspace(self, workspace):
-        """Set workspace."""
-        if check_value("workspace", workspace, str):
-            self._workspace = workspace
-
-    @property
-    def resume_from(self):
-        """Get resume_from."""
-        return self._resume_from
-
-    @resume_from.setter
-    def resume_from(self, resume_from):
-        """Set resume_from."""
-        if resume_from is None or check_value("resume_from", resume_from, str):
-            self._resume_from = resume_from
-
 
 options = Options()
 
@@ -301,56 +262,9 @@ class CpuInfo(object):
         return 0
 
 
-def dump_elapsed_time(customized_msg=""):
-    """Get the elapsed time for decorated functions.
-
-    Args:
-        customized_msg (string, optional): The parameter passed to decorator. Defaults to None.
-    """
-
-    def f(func):
-
-        def fi(*args, **kwargs):
-            start = time.time()
-            res = func(*args, **kwargs)
-            end = time.time()
-            logger.info(
-                "%s elapsed time: %s ms"
-                % (customized_msg if customized_msg else func.__qualname__, round((end - start) * 1000, 2))
-            )
-            return res
-
-        return fi
-
-    return f
-
-
 def set_random_seed(seed: int):
     """Set the random seed in config."""
     options.random_seed = seed
-
-
-def set_workspace(workspace: str):
-    """Set the workspace in config."""
-    options.workspace = workspace
-
-
-def set_resume_from(resume_from: str):
-    """Set the resume_from in config."""
-    options.resume_from = resume_from
-
-
-def find_by_name(name, item_list):
-    """Helper function to find item by name in a list."""
-    items = []
-    for item in item_list:
-        assert hasattr(item, "name"), "{} should have a 'name' attribute defined".format(item)  # pragma: no cover
-        if item.name == name:
-            items.append(item)
-    if len(items) > 0:
-        return items[0]
-    else:
-        return None
 
 
 def simple_progress_bar(total, i):
@@ -385,15 +299,6 @@ def register_algo(name):
 
     return decorator
 
-def check_model_with_infer_shapes(model):
-    """Check if the model has been shape inferred."""
-    if isinstance(model, (pathlib.Path, str)):
-        model = onnx.load(model, load_external_data=False)
-    elif isinstance(model, onnx_model.ONNXModel):
-        model = model.model
-    if len(model.graph.value_info) > 0:
-        return True
-    return False
 
 def auto_detect_ep():
     eps = ort.get_available_providers()

@@ -27,6 +27,7 @@ from packaging import version
 
 from onnx_neural_compressor import constants
 from onnx_neural_compressor import utility
+from onnxruntime.quantization import onnx_model
 
 if sys.version_info < (3, 11) and util.find_spec("onnxruntime_extensions"):  # pragma: no cover
     import onnxruntime_extensions
@@ -78,6 +79,28 @@ ONNX_INT_TYPE_REDUCED_RANGE = {
     onnx.TensorProto.UINT8: (0, 127),
     onnx.TensorProto.INT8: (-64, 64),
 }
+
+def check_model_with_infer_shapes(model):
+    """Check if the model has been shape inferred."""
+    if isinstance(model, (pathlib.Path, str)):
+        model = onnx.load(model, load_external_data=False)
+    elif isinstance(model, onnx_model.ONNXModel):
+        model = model.model
+    if len(model.graph.value_info) > 0:
+        return True
+    return False
+
+def find_by_name(name, item_list):
+    """Helper function to find item by name in a list."""
+    items = []
+    for item in item_list:
+        assert hasattr(item, "name"), "{} should have a 'name' attribute defined".format(item)  # pragma: no cover
+        if item.name == name:
+            items.append(item)
+    if len(items) > 0:
+        return items[0]
+    else:
+        return None
 
 def is_quantizable_type(data_type):
     return data_type in [onnx.TensorProto.FLOAT, onnx.TensorProto.FLOAT16, onnx.TensorProto.BFLOAT16]

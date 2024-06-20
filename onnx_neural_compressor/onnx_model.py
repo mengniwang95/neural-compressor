@@ -407,43 +407,6 @@ class ONNXModel(onnx_model.ONNXModel):
         self.model.graph.ClearField("node")
         self.model.graph.node.extend(nodes)
 
-    def get_nodes_chain(self, start, stop, result_chain=[]):
-        """Get nodes chain with given start node and stop node."""
-        # process start node list
-        start_node = collections.deque()
-        for node in start:
-            if isinstance(node, str):
-                start_node.append(node)
-            elif isinstance(node, onnx.NodeProto):
-                start_node.append(node.name)
-            else:
-                assert False, "'get_nodes_chain' function only support list[string]" "or list[NodeProto] params"
-
-        # process stop node list
-        stop_node = []
-        for node in stop:
-            if isinstance(node, str):
-                stop_node.append(node)
-            elif isinstance(node, onnx.NodeProto):
-                stop_node.append(node.name)
-            else:
-                assert False, "'get_nodes_chain' function only support list[string]" "or list[NodeProto] params"
-
-        while start_node:
-            node_name = start_node.popleft()
-            if node_name in stop_node:
-                continue
-            if node_name not in result_chain:
-                result_chain.append(node_name)
-            else:
-                continue
-
-            node = utility.find_by_name(node_name, list(self.model.graph.node))
-            for parent in self.get_parents(node):
-                start_node.append(parent.name)
-
-        return result_chain
-
     def find_split_node_for_layer_wise_quantization(self):
         """Find split node for layer wise quantization."""
         # find split nodes of decoder blocks

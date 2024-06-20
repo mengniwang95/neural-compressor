@@ -20,7 +20,6 @@ from onnx import onnx_pb as onnx_proto
 from onnx_neural_compressor.algorithms.post_training_quant.operators import base_op
 from onnx_neural_compressor.algorithms import utility as quant_utils
 from onnx_neural_compressor import constants
-from onnx_neural_compressor import utility
 
 
 @base_op.op_registry(op_types="Conv, FusedConv", mode=[constants.DYNAMIC_QUANT])
@@ -114,7 +113,7 @@ class ConvOperator(base_op.Operator):
         # Add mul operation to multiply scales of two inputs.
         scales_mul_op = node.name + "_scales_mul"
 
-        scales_mul_node = utility.find_by_name(scales_mul_op, self.quantizer.new_nodes)
+        scales_mul_node = quant_utils.find_by_name(scales_mul_op, self.quantizer.new_nodes)
         if scales_mul_node is None:
             scales_mul_node = onnx.helper.make_node(
                 "Mul", [scale_0, scale_1], [scales_mul_op + ":0"], scales_mul_op

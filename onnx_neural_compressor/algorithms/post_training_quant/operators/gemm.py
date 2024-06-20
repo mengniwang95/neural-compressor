@@ -19,7 +19,6 @@ from onnx_neural_compressor.algorithms.post_training_quant.operators import base
 from onnx_neural_compressor.algorithms import utility as quant_utils
 from onnx_neural_compressor import constants
 from onnx_neural_compressor import logger
-from onnx_neural_compressor import utility
 
 
 @base_op.op_registry(op_types="Gemm", mode=[constants.STATIC_QUANT])
@@ -33,7 +32,7 @@ class GemmOperator(base_op.Operator):
     def quantize_check(self):
         """Check if quantizaion can be done."""
         node = self.node
-        if len(node.input) == 3 and not utility.find_by_name(node.input[2], self.quantizer.model.initializer()):
+        if len(node.input) == 3 and not quant_utils.find_by_name(node.input[2], self.quantizer.model.initializer()):
 
             logger.warning(
                 "Bias of Gemm node '{}' is not constant. "
@@ -47,14 +46,14 @@ class GemmOperator(base_op.Operator):
         """Do quantizaion."""
         node = self.node
         self.quantizer.quantize_inputs(node, [0])
-        if self.per_channel and utility.find_by_name(node.input[1], self.quantizer.model.initializer()):
+        if self.per_channel and quant_utils.find_by_name(node.input[1], self.quantizer.model.initializer()):
             self.quantizer.quantize_weights_per_channel(
                 node, [1], self.weight_dtype, self.weight_sym, 0 if quant_utils.is_B_transposed(node) else 1
             )
         else:
             self.quantizer.quantize_inputs(node, [1])
 
-        if len(node.input) == 3 and utility.find_by_name(node.input[2], self.quantizer.model.initializer()):
+        if len(node.input) == 3 and quant_utils.find_by_name(node.input[2], self.quantizer.model.initializer()):
             self.quantizer.quantize_bias_tensor(node)
             beta_attribute = [attr for attr in node.attribute if attr.name == "beta"]
             if len(beta_attribute):

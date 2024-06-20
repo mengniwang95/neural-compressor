@@ -19,7 +19,6 @@ from onnx import onnx_pb as onnx_proto
 from onnx_neural_compressor.algorithms.post_training_quant.operators import base_op
 from onnx_neural_compressor.algorithms import utility as quant_utils
 from onnx_neural_compressor import constants
-from onnx_neural_compressor import utility
 
 
 @base_op.op_registry(op_types="MatMul", mode=[constants.DYNAMIC_QUANT])
@@ -44,7 +43,7 @@ class MatMulOperator(base_op.Operator):
         """Do quantizaion."""
         node = self.node
         self.quantizer.quantize_inputs(node, [0])
-        if self.per_channel and utility.find_by_name(node.input[1], self.quantizer.model.initializer()):
+        if self.per_channel and quant_utils.find_by_name(node.input[1], self.quantizer.model.initializer()):
             self.quantizer.quantize_weights_per_channel(node, [1], self.weight_dtype, self.weight_sym, 1)
         else:
             self.quantizer.quantize_inputs(node, [1])
@@ -92,7 +91,7 @@ class MatMulOperator(base_op.Operator):
         # Add mul operation to multiply scales of two inputs.
         scales_mul_op = node.name + "_scales_mul"
 
-        scales_mul_node = utility.find_by_name(scales_mul_op, self.quantizer.new_nodes)
+        scales_mul_node = quant_utils.find_by_name(scales_mul_op, self.quantizer.new_nodes)
         if scales_mul_node is None:
             scales_mul_node = onnx.helper.make_node(
                 "Mul", [scale[0], scale[1]], [scales_mul_op + ":0"], scales_mul_op
@@ -126,7 +125,7 @@ class StaticMatMulOperator(MatMulOperator):
         """Do quantizaion."""
         node = self.node
         self.quantizer.quantize_inputs(node, [0])
-        if self.per_channel and utility.find_by_name(node.input[1], self.quantizer.model.initializer()):
+        if self.per_channel and quant_utils.find_by_name(node.input[1], self.quantizer.model.initializer()):
             self.quantizer.quantize_weights_per_channel(node, [1], self.weight_dtype, self.weight_sym, 1)
         else:
             self.quantizer.quantize_inputs(node, [1])
